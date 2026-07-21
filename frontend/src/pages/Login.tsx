@@ -1,5 +1,6 @@
 import { FormEvent, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
+import { normalizeUnknownError } from "../api/errors";
 import { useAuth } from "../auth/AuthContext";
 
 export function Login({ mode }: { mode: "login" | "signup" }) {
@@ -22,7 +23,7 @@ export function Login({ mode }: { mode: "login" | "signup" }) {
       else await login(email, password);
       navigate("/dashboard");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Authentication failed");
+      setError(normalizeUnknownError(err, "Authentication failed").message);
     } finally {
       setBusy(false);
     }

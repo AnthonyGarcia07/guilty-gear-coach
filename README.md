@@ -10,7 +10,7 @@ Guilty Gear Coach is a Phase 1 full-stack match tracker for Guilty Gear players.
 - Alembic database migration for the initial schema
 - Match CRUD API routes scoped to the authenticated user
 - Dashboard stats for total matches, win rate, matchup win rate, mistake tags, loss reasons, and recent matches
-- Manual match form with player character, opponent character, win/loss, date, rank/floor, duration, notes, mistake tags, strength tags, reason for loss, practice focus, and replay/video filename placeholder
+- Manual match form with player character, opponent character, win/loss, date, rank, duration, notes, mistake tags, strength tags, reason for loss, practice focus, and replay/video filename placeholder
 - Focused unit test for dashboard stat aggregation
 
 ## Project Structure

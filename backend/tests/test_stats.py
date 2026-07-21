@@ -11,7 +11,7 @@ def make_match(opponent: str, result: str, mistakes: list[str], reason: str | No
         opponent_character=opponent,
         result=result,
         played_on=date(2026, 7, 8),
-        rank_floor="Floor 10",
+        rank_floor="Diamond",
         duration_seconds=120,
         notes=None,
         mistake_tags=mistakes,

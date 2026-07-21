@@ -233,6 +233,39 @@ textarea {
   color: #ff9b9b;
 }
 
+.form-success {
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(56, 211, 159, 0.14);
+  color: #7af0c4;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.form-success button {
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #f5f7fb;
+  cursor: pointer;
+  font-weight: 800;
+  padding: 8px 10px;
+}
+
+.field-error {
+  color: #ff9b9b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.field-hint {
+  color: #ffcc5c;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .app-shell {
   min-height: 100vh;
   display: grid;

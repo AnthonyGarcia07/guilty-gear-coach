@@ -1,12 +1,9 @@
 import type { AuthResponse, DashboardStats, Match, MatchInput, User } from "../types";
+import { ApiError, normalizeErrorResponse } from "./errors";
 
 const API_URL = (import.meta.env.VITE_API_URL || "/api").replace(/\/$/, "");
 
-export class ApiError extends Error {
-  constructor(public status: number, message: string) {
-    super(message);
-  }
-}
+export { ApiError } from "./errors";
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = localStorage.getItem("ggc_token");
@@ -21,8 +18,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   });
 
   if (!response.ok) {
-    const body = await response.json().catch(() => ({ detail: "Request failed" }));
-    throw new ApiError(response.status, body.detail ?? "Request failed");
+    const parsed = await normalizeErrorResponse(response);
+    throw new ApiError(response.status, parsed.message, parsed.fieldErrors);
   }
 
   if (response.status === 204) {

@@ -24,14 +24,14 @@ export function MatchDetail() {
       </div>
       <div className="detail-grid">
         <article><span>Date</span><strong>{match.played_on}</strong></article>
-        <article><span>Rank / floor</span><strong>{match.rank_floor || "Not logged"}</strong></article>
+        <article><span>Rank</span><strong>{match.rank_floor || "Not logged"}</strong></article>
         <article><span>Duration</span><strong>{match.duration_seconds ? `${match.duration_seconds}s` : "Not logged"}</strong></article>
       </div>
       <section className="panel">
         <h2>Edit match notes</h2>
         <MatchForm initial={match} submitLabel="Update match" onSubmit={async (payload: MatchInput) => {
-          const updated = await api.updateMatch(match.id, payload);
-          setMatch(updated);
+          await api.updateMatch(match.id, payload);
+          navigate("/matches", { state: { message: "Match updated successfully." } });
         }} />
       </section>
     </section>

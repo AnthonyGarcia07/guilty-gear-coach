@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -12,7 +14,7 @@ router = APIRouter(prefix="/matches", tags=["matches"])
 
 @router.get("", response_model=list[MatchRead])
 def list_matches(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[Match]:
-    return list(db.scalars(select(Match).where(Match.owner_id == current_user.id).order_by(Match.played_on.desc(), Match.id.desc())))
+    return list(db.scalars(select(Match).where(Match.owner_id == current_user.id).order_by(Match.updated_at.desc(), Match.id.desc())))
 
 
 @router.post("", response_model=MatchRead, status_code=status.HTTP_201_CREATED)
@@ -39,6 +41,7 @@ def update_match(match_id: int, payload: MatchUpdate, current_user: User = Depen
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found")
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(match, field, value)
+    match.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(match)
     return match
