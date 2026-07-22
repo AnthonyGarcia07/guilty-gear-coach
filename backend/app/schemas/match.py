@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 MIN_MATCH_DATE = date(2021, 6, 11)
 MAX_DURATION_SECONDS = 60 * 30
+MAX_SET_SCORE = 10
 MAX_TAGS = 12
 MAX_TAG_LENGTH = 40
 VALID_RANKS = (
@@ -105,6 +106,24 @@ def validate_tags(value: list[str] | None) -> list[str] | None:
     return cleaned
 
 
+def validate_completed_set_score(result: str | None, rounds_won: int | None, rounds_lost: int | None, first_to: int | None) -> None:
+    score_values = (rounds_won, rounds_lost, first_to)
+    if all(value is None for value in score_values):
+        return
+    if any(value is None for value in score_values):
+        raise ValueError("Enter rounds won, rounds lost, and first-to together for the completed set score.")
+    if rounds_won == rounds_lost:
+        raise ValueError("Completed set score cannot be tied.")
+    if max(rounds_won, rounds_lost) != first_to:
+        raise ValueError("Completed set score must have exactly one side reaching the selected first-to value.")
+    if min(rounds_won, rounds_lost) >= first_to:
+        raise ValueError("The losing side must finish below the selected first-to value.")
+    if result == "win" and rounds_won <= rounds_lost:
+        raise ValueError("A win must have your score ahead of the opponent.")
+    if result == "loss" and rounds_lost <= rounds_won:
+        raise ValueError("A loss must have the opponent score ahead of yours.")
+
+
 class MatchBase(BaseModel):
     player_character: str = Field(min_length=1, max_length=80)
     opponent_character: str = Field(min_length=1, max_length=80)
@@ -112,6 +131,9 @@ class MatchBase(BaseModel):
     played_on: date
     rank_floor: str = Field(min_length=1, max_length=80)
     duration_seconds: int = Field(ge=1, le=MAX_DURATION_SECONDS)
+    rounds_won: int | None = Field(default=None, ge=0, le=MAX_SET_SCORE)
+    rounds_lost: int | None = Field(default=None, ge=0, le=MAX_SET_SCORE)
+    first_to: int | None = Field(default=None, gt=0, le=MAX_SET_SCORE)
     notes: str | None = Field(default=None, max_length=2000)
     mistake_tags: list[str] = Field(default_factory=list)
     strength_tags: list[str] = Field(default_factory=list)
@@ -130,6 +152,11 @@ class MatchBase(BaseModel):
     _validate_mistake_tags = field_validator("mistake_tags")(validate_tags)
     _validate_strength_tags = field_validator("strength_tags")(validate_tags)
 
+    @model_validator(mode="after")
+    def validate_score(self) -> "MatchBase":
+        validate_completed_set_score(self.result, self.rounds_won, self.rounds_lost, self.first_to)
+        return self
+
 
 class MatchCreate(MatchBase):
     pass
@@ -142,6 +169,9 @@ class MatchUpdate(BaseModel):
     played_on: date | None = None
     rank_floor: str | None = Field(default=None, max_length=80)
     duration_seconds: int | None = Field(default=None, ge=1, le=MAX_DURATION_SECONDS)
+    rounds_won: int | None = Field(default=None, ge=0, le=MAX_SET_SCORE)
+    rounds_lost: int | None = Field(default=None, ge=0, le=MAX_SET_SCORE)
+    first_to: int | None = Field(default=None, gt=0, le=MAX_SET_SCORE)
     notes: str | None = Field(default=None, max_length=2000)
     mistake_tags: list[str] | None = None
     strength_tags: list[str] | None = None
@@ -175,6 +205,9 @@ class MatchRead(BaseModel):
     played_on: date
     rank_floor: str | None = None
     duration_seconds: int | None = None
+    rounds_won: int | None = None
+    rounds_lost: int | None = None
+    first_to: int | None = None
     notes: str | None = None
     mistake_tags: list[str] = Field(default_factory=list)
     strength_tags: list[str] = Field(default_factory=list)

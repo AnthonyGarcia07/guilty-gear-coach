@@ -2,6 +2,7 @@ import { useState } from "react";
 import { normalizeUnknownError } from "../api/errors";
 import { striveCharacters, striveRanks } from "../constants/match";
 import type { Match, MatchInput, Result } from "../types";
+import { maxSetScore, validateMatchScore } from "../utils/matchScoreValidation";
 
 const mistakePresets = ["corner escape", "anti-air", "meter spend", "burst timing", "dropped conversion", "predictable okizeme"];
 const strengthPresets = ["round start", "strike/throw", "whiff punish", "resource control", "corner pressure", "defense"];
@@ -13,8 +14,11 @@ const maxPracticeLength = 1000;
 const maxTagLength = 40;
 const maxTags = 12;
 
-type MatchFormState = Omit<MatchInput, "duration_seconds"> & {
+type MatchFormState = Omit<MatchInput, "duration_seconds" | "rounds_won" | "rounds_lost" | "first_to"> & {
   duration_seconds: string;
+  rounds_won: string;
+  rounds_lost: string;
+  first_to: string;
 };
 
 type FieldErrors = Partial<Record<keyof MatchInput, string>>;
@@ -26,6 +30,9 @@ const blankMatch: MatchFormState = {
   played_on: new Date().toISOString().slice(0, 10),
   rank_floor: "Iron",
   duration_seconds: "120",
+  rounds_won: "",
+  rounds_lost: "",
+  first_to: "",
   notes: "",
   mistake_tags: [],
   strength_tags: [],
@@ -61,6 +68,9 @@ function sanitizeForm(form: MatchFormState): MatchInput {
     opponent_character: form.opponent_character.trim(),
     rank_floor: form.rank_floor?.trim() || null,
     duration_seconds: form.duration_seconds.trim() ? Number(form.duration_seconds) : null,
+    rounds_won: form.rounds_won.trim() ? Number(form.rounds_won) : null,
+    rounds_lost: form.rounds_lost.trim() ? Number(form.rounds_lost) : null,
+    first_to: form.first_to.trim() ? Number(form.first_to) : null,
     notes: form.notes?.trim() || null,
     mistake_tags: uniqueTrimmedTags(form.mistake_tags),
     strength_tags: uniqueTrimmedTags(form.strength_tags),
@@ -90,6 +100,12 @@ function validateForm(form: MatchFormState): FieldErrors {
   } else if (Number(form.duration_seconds) > maxDurationSeconds) {
     errors.duration_seconds = "Match duration must be 30 minutes or less.";
   }
+  Object.assign(errors, validateMatchScore({
+    result: form.result,
+    roundsWon: form.rounds_won,
+    roundsLost: form.rounds_lost,
+    firstTo: form.first_to
+  }));
   if ((form.notes?.trim().length ?? 0) > maxNotesLength) errors.notes = `Notes must be ${maxNotesLength} characters or fewer.`;
   if ((form.reason_for_loss?.trim().length ?? 0) > maxReasonLength) errors.reason_for_loss = `Reason for loss must be ${maxReasonLength} characters or fewer.`;
   if ((form.practice_next?.trim().length ?? 0) > maxPracticeLength) errors.practice_next = `Practice field must be ${maxPracticeLength} characters or fewer.`;
@@ -114,6 +130,9 @@ export function MatchForm({ initial, onSubmit, submitLabel }: { initial?: Match;
     played_on: initial.played_on,
     rank_floor: normalizeRankForEdit(initial.rank_floor),
     duration_seconds: initial.duration_seconds?.toString() ?? "120",
+    rounds_won: initial.rounds_won?.toString() ?? "",
+    rounds_lost: initial.rounds_lost?.toString() ?? "",
+    first_to: initial.first_to?.toString() ?? "",
     notes: initial.notes ?? "",
     mistake_tags: initial.mistake_tags,
     strength_tags: initial.strength_tags,
@@ -162,6 +181,9 @@ export function MatchForm({ initial, onSubmit, submitLabel }: { initial?: Match;
       <label>Date<input type="date" value={form.played_on} onChange={(event) => setField("played_on", event.target.value)} />{fieldErrors.played_on && <span className="field-error">{fieldErrors.played_on}</span>}</label>
       <label>Rank<select value={form.rank_floor ?? ""} onChange={(event) => setField("rank_floor", event.target.value)}><option value="">Select rank</option>{striveRanks.map((rank) => <option key={rank} value={rank}>{rank}</option>)}</select>{initial?.rank_floor && !striveRanks.includes(initial.rank_floor as (typeof striveRanks)[number]) && !form.rank_floor && <span className="field-hint">Current legacy rank: {initial.rank_floor}. Select a new rank before saving.</span>}{fieldErrors.rank_floor && <span className="field-error">{fieldErrors.rank_floor}</span>}</label>
       <label>Duration seconds<input type="number" min={1} max={maxDurationSeconds} value={form.duration_seconds} onChange={(event) => setField("duration_seconds", event.target.value)} />{fieldErrors.duration_seconds && <span className="field-error">{fieldErrors.duration_seconds}</span>}</label>
+      <label>Your set score<input type="number" min={0} max={maxSetScore} value={form.rounds_won} onChange={(event) => setField("rounds_won", event.target.value)} placeholder="2" /><span className="field-hint">Games you won in this completed match/set, not individual gameplay rounds.</span>{fieldErrors.rounds_won && <span className="field-error">{fieldErrors.rounds_won}</span>}</label>
+      <label>Opponent set score<input type="number" min={0} max={maxSetScore} value={form.rounds_lost} onChange={(event) => setField("rounds_lost", event.target.value)} placeholder="1" /><span className="field-hint">Games the opponent won in the completed match/set.</span>{fieldErrors.rounds_lost && <span className="field-error">{fieldErrors.rounds_lost}</span>}</label>
+      <label>Set format<input type="number" min={1} max={maxSetScore} value={form.first_to} onChange={(event) => setField("first_to", event.target.value)} placeholder="3" /><span className="field-hint">First-to games required to win the reviewed set, such as FT2 or FT3.</span>{fieldErrors.first_to && <span className="field-error">{fieldErrors.first_to}</span>}</label>
       <label className="wide">Mistake tags<input value={tagString(form.mistake_tags)} onChange={(event) => setField("mistake_tags", parseTags(event.target.value))} placeholder="anti-air, burst timing" />{fieldErrors.mistake_tags && <span className="field-error">{fieldErrors.mistake_tags}</span>}</label>
       <div className="tag-row wide">{mistakePresets.map((tag) => <button type="button" className={form.mistake_tags.includes(tag) ? "chip selected" : "chip"} key={tag} onClick={() => toggleTag("mistake_tags", tag)}>{tag}</button>)}</div>
       <label className="wide">Strength tags<input value={tagString(form.strength_tags)} onChange={(event) => setField("strength_tags", parseTags(event.target.value))} placeholder="corner pressure, whiff punish" />{fieldErrors.strength_tags && <span className="field-error">{fieldErrors.strength_tags}</span>}</label>

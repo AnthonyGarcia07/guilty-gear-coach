@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { MatchForm } from "../components/MatchForm";
+import { submitMatchUpdate } from "./matchSubmit";
 import type { Match, MatchInput } from "../types";
 
 export function MatchDetail() {
@@ -30,8 +31,7 @@ export function MatchDetail() {
       <section className="panel">
         <h2>Edit match notes</h2>
         <MatchForm initial={match} submitLabel="Update match" onSubmit={async (payload: MatchInput) => {
-          await api.updateMatch(match.id, payload);
-          navigate("/matches", { state: { message: "Match updated successfully." } });
+          await submitMatchUpdate(match.id, payload, api, navigate);
         }} />
       </section>
     </section>

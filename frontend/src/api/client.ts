@@ -1,4 +1,4 @@
-import type { AuthResponse, DashboardStats, Match, MatchInput, User } from "../types";
+import type { AuthResponse, CoachingInsights, DashboardStats, Match, MatchInput, User } from "../types";
 import { ApiError, normalizeErrorResponse } from "./errors";
 
 const API_URL = (import.meta.env.VITE_API_URL || "/api").replace(/\/$/, "");
@@ -36,6 +36,7 @@ export const api = {
     request<AuthResponse>("/auth/login", { method: "POST", body: JSON.stringify(payload) }),
   me: () => request<User>("/users/me"),
   stats: () => request<DashboardStats>("/stats/dashboard"),
+  coachingInsights: () => request<CoachingInsights>("/coaching/insights"),
   listMatches: () => request<Match[]>("/matches"),
   getMatch: (id: string) => request<Match>(`/matches/${id}`),
   createMatch: (payload: MatchInput) => request<Match>("/matches", { method: "POST", body: JSON.stringify(payload) }),

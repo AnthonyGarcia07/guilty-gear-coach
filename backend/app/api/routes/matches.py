@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.models import Match, User
-from app.schemas.match import MatchCreate, MatchRead, MatchUpdate
+from app.schemas.match import MatchCreate, MatchRead, MatchUpdate, validate_completed_set_score
 
 router = APIRouter(prefix="/matches", tags=["matches"])
 
@@ -39,7 +39,19 @@ def update_match(match_id: int, payload: MatchUpdate, current_user: User = Depen
     match = db.get(Match, match_id)
     if not match or match.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found")
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    updates = payload.model_dump(exclude_unset=True)
+    result = updates.get("result", match.result)
+    rounds_won = updates.get("rounds_won", match.rounds_won)
+    rounds_lost = updates.get("rounds_lost", match.rounds_lost)
+    first_to = updates.get("first_to", match.first_to)
+    try:
+        validate_completed_set_score(result, rounds_won, rounds_lost, first_to)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=[{"loc": ["body", "rounds_won"], "msg": str(error), "type": "value_error"}],
+        ) from error
+    for field, value in updates.items():
         setattr(match, field, value)
     match.updated_at = datetime.now(timezone.utc)
     db.commit()

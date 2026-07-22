@@ -20,6 +20,9 @@ export interface Match {
   played_on: string;
   rank_floor?: string | null;
   duration_seconds?: number | null;
+  rounds_won?: number | null;
+  rounds_lost?: number | null;
+  first_to?: number | null;
   notes?: string | null;
   mistake_tags: string[];
   strength_tags: string[];
@@ -53,4 +56,16 @@ export interface DashboardStats {
   most_common_mistake_tags: TagCount[];
   most_common_reason_for_loss: TagCount | null;
   recent_matches: Match[];
+}
+
+export interface CoachingInsights {
+  overallWinRate: number;
+  longest_win_streak: number;
+  longest_losing_streak: number;
+  current_streak_type: "win" | "loss" | null;
+  current_streak_count: number;
+  mostPlayedCharacter: string | null;
+  bestMatchup: string | null;
+  worstMatchup: string | null;
+  totalMatches: number;
 }

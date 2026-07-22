@@ -14,6 +14,9 @@ def valid_match_payload() -> dict:
         "played_on": date(2026, 7, 1),
         "rank_floor": " Diamond ",
         "duration_seconds": 180,
+        "rounds_won": 2,
+        "rounds_lost": 1,
+        "first_to": 2,
         "notes": "  Good anti-air conversions.  ",
         "mistake_tags": [" meter spend ", "meter spend", "corner escape"],
         "strength_tags": [" whiff punish "],
@@ -27,6 +30,9 @@ def test_match_create_trims_optional_text_and_tags():
     match = MatchCreate(**valid_match_payload())
 
     assert match.rank_floor == "Diamond"
+    assert match.rounds_won == 2
+    assert match.rounds_lost == 1
+    assert match.first_to == 2
     assert match.notes == "Good anti-air conversions."
     assert match.mistake_tags == ["meter spend", "corner escape"]
     assert match.reason_for_loss is None
@@ -42,6 +48,10 @@ def test_match_create_trims_optional_text_and_tags():
         ("rank_floor", "Celestial Challenge", "valid Guilty Gear Strive rank"),
         ("duration_seconds", 1801, "less than or equal to 1800"),
         ("duration_seconds", -1, "greater than or equal to 1"),
+        ("rounds_won", -1, "greater than or equal to 0"),
+        ("rounds_lost", -1, "greater than or equal to 0"),
+        ("rounds_won", 2323, "less than or equal to 10"),
+        ("first_to", 0, "greater than 0"),
         ("played_on", date(2021, 6, 10), "June 11, 2021"),
         ("played_on", date.today() + timedelta(days=1), "future"),
         ("notes", "x" * 2001, "at most 2000"),
@@ -57,6 +67,59 @@ def test_match_create_rejects_invalid_values(field: str, value, message: str):
         MatchCreate(**payload)
 
     assert message in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("result", "rounds_won", "rounds_lost", "first_to"),
+    [
+        ("win", 2, 0, 2),
+        ("win", 2, 1, 2),
+        ("loss", 0, 2, 2),
+        ("loss", 1, 2, 2),
+        ("win", 3, 2, 3),
+        ("loss", 1, 3, 3),
+    ],
+)
+def test_match_create_accepts_realistic_completed_set_scores(result: str, rounds_won: int, rounds_lost: int, first_to: int):
+    payload = valid_match_payload()
+    payload.update({"result": result, "rounds_won": rounds_won, "rounds_lost": rounds_lost, "first_to": first_to})
+
+    match = MatchCreate(**payload)
+
+    assert match.rounds_won == rounds_won
+    assert match.rounds_lost == rounds_lost
+    assert match.first_to == first_to
+
+
+@pytest.mark.parametrize(
+    ("result", "rounds_won", "rounds_lost", "first_to", "message"),
+    [
+        ("win", 1, 1, 2, "cannot be tied"),
+        ("loss", 2, 2, 3, "cannot be tied"),
+        ("win", 1, 2, 2, "win must have your score ahead"),
+        ("loss", 2, 1, 2, "loss must have the opponent score ahead"),
+        ("win", 1, 0, 2, "exactly one side reaching"),
+        ("win", 2, 2, 2, "cannot be tied"),
+    ],
+)
+def test_match_create_rejects_inconsistent_completed_set_scores(result: str, rounds_won: int, rounds_lost: int, first_to: int, message: str):
+    payload = valid_match_payload()
+    payload.update({"result": result, "rounds_won": rounds_won, "rounds_lost": rounds_lost, "first_to": first_to})
+
+    with pytest.raises(ValidationError) as error:
+        MatchCreate(**payload)
+
+    assert message in str(error.value)
+
+
+def test_match_create_requires_complete_score_context_when_score_is_present():
+    payload = valid_match_payload()
+    payload["first_to"] = None
+
+    with pytest.raises(ValidationError) as error:
+        MatchCreate(**payload)
+
+    assert "Enter rounds won, rounds lost, and first-to together" in str(error.value)
 
 
 def test_match_update_uses_same_validation_rules():

@@ -1,17 +1,18 @@
 # Guilty Gear Coach
 
-Guilty Gear Coach is a Phase 1 full-stack match tracker for Guilty Gear players. It focuses on useful manual logging before AI coaching, replay parsing, or video analysis are introduced.
+Guilty Gear Coach is a full-stack match tracker and deterministic coaching foundation for Guilty Gear players. It focuses on useful manual set review before replay parsing, video analysis, or natural-language AI explanations are introduced.
 
-## What Phase 1 Includes
+## What The Current App Includes
 
 - React + TypeScript frontend with a responsive dark esports dashboard
 - FastAPI backend with JWT signup/login
 - PostgreSQL-backed users and matches
-- Alembic database migration for the initial schema
+- Alembic database migrations
 - Match CRUD API routes scoped to the authenticated user
 - Dashboard stats for total matches, win rate, matchup win rate, mistake tags, loss reasons, and recent matches
-- Manual match form with player character, opponent character, win/loss, date, rank, duration, notes, mistake tags, strength tags, reason for loss, practice focus, and replay/video filename placeholder
-- Focused unit test for dashboard stat aggregation
+- Manual match form with player character, opponent character, win/loss, set score context, date, rank, duration, notes, mistake tags, strength tags, reason for loss, practice focus, and replay/video filename placeholder
+- Deterministic coaching insights from existing match history only
+- Focused backend and frontend tests
 
 ## Project Structure
 
@@ -99,7 +100,29 @@ pytest
 - `PATCH /api/matches/{match_id}`
 - `DELETE /api/matches/{match_id}`
 - `GET /api/stats/dashboard`
+- `GET /api/coaching/insights`
 
-## Phase 2 Ready Areas
+## Product Vision: Stockfish For Guilty Gear Strive
 
-The schema keeps replay/video as a placeholder filename now, while leaving room for a future upload table, parsing job queue, OpenAI-generated coaching summaries, matchup knowledge, and video event extraction.
+The long-term goal is a "Stockfish for Guilty Gear Strive": structured replay analysis that identifies gameplay decisions, mistakes, strengths, and practice priorities. The current `Match` record represents one completed match or set that the player wants to review. It does not model every game or round yet.
+
+Terminology:
+
+- A round is one health-bar battle.
+- A game is won by taking two rounds.
+- A set contains multiple games.
+- Standard online and tournament formats may use different numbers of games required to win a set.
+
+Future replay-aware architecture may introduce this hierarchy:
+
+- Replay session
+- Set
+- Game
+- Round
+- Gameplay event
+- Analysis finding
+- Coaching recommendation
+
+Future analysis may eventually identify neutral losses, missed anti-airs, failed punish opportunities, unsafe attacks, burst mistakes, tension or meter usage, defensive habits, repeated mistakes, wall-break decisions, decision quality by timestamp, game-level turning points, and round-level turning points.
+
+The analysis system should produce structured, deterministic findings first. An LLM may later explain those findings in natural language, but it should not invent the underlying gameplay analysis. Do not add replay, game, round, gameplay-event, OpenAI, or external-AI infrastructure until a later phase explicitly calls for it.

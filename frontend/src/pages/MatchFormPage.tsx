@@ -1,6 +1,7 @@
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { MatchForm } from "../components/MatchForm";
+import { submitNewMatch } from "./matchSubmit";
 import type { MatchInput } from "../types";
 
 export function MatchFormPage() {
@@ -10,8 +11,7 @@ export function MatchFormPage() {
       <div className="page-header"><div><span className="eyebrow">Manual analysis</span><h1>Add Match</h1></div></div>
       <section className="panel">
         <MatchForm submitLabel="Save match" onSubmit={async (payload: MatchInput) => {
-          const match = await api.createMatch(payload);
-          navigate(`/matches/${match.id}`);
+          await submitNewMatch(payload, api, navigate);
         }} />
       </section>
     </section>
