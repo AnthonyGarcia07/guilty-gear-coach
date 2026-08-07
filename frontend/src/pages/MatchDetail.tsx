@@ -1,15 +1,18 @@
 import { Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { MatchForm } from "../components/MatchForm";
 import { submitMatchUpdate } from "./matchSubmit";
 import type { Match, MatchInput } from "../types";
+import { getMatchHistoryReturnFromState } from "../utils/matchHistoryReturn";
 
 export function MatchDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const [match, setMatch] = useState<Match | null>(null);
+  const returnTo = getMatchHistoryReturnFromState(location.state);
 
   useEffect(() => {
     if (id) api.getMatch(id).then(setMatch);
@@ -31,7 +34,7 @@ export function MatchDetail() {
       <section className="panel">
         <h2>Edit match notes</h2>
         <MatchForm initial={match} submitLabel="Update match" onSubmit={async (payload: MatchInput) => {
-          await submitMatchUpdate(match.id, payload, api, navigate);
+          await submitMatchUpdate(match.id, payload, api, navigate, returnTo);
         }} />
       </section>
     </section>

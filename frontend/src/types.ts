@@ -1,4 +1,5 @@
 export type Result = "win" | "loss";
+export type MatchSort = "recently_played" | "last_updated" | "oldest_played";
 
 export interface User {
   id: number;
@@ -35,6 +36,15 @@ export interface Match {
 
 export type MatchInput = Omit<Match, "id" | "created_at" | "updated_at">;
 
+export interface MatchListResponse {
+  items: Match[];
+  page: number;
+  page_size: number;
+  total_items: number;
+  total_pages: number;
+  sort: MatchSort;
+}
+
 export interface CharacterWinRate {
   opponent_character: string;
   matches: number;
@@ -59,13 +69,86 @@ export interface DashboardStats {
 }
 
 export interface CoachingInsights {
-  overallWinRate: number;
-  longest_win_streak: number;
-  longest_losing_streak: number;
-  current_streak_type: "win" | "loss" | null;
-  current_streak_count: number;
-  mostPlayedCharacter: string | null;
-  bestMatchup: string | null;
-  worstMatchup: string | null;
-  totalMatches: number;
+  total_matches: number;
+  performance: {
+    overall_win_rate: number | null;
+    recent_5_win_rate: number | null;
+    recent_10_win_rate: number | null;
+    previous_10_win_rate: number | null;
+    performance_trend: "improving" | "declining" | "stable" | null;
+    matches_analyzed: number;
+    trend_sample_size: number;
+    trend_threshold: number;
+  };
+  streaks: {
+    longest_win_streak: number;
+    longest_losing_streak: number;
+    current_streak_type: "win" | "loss" | null;
+    current_streak_count: number;
+  };
+  character: {
+    most_played_character: string | null;
+    matches: number;
+  };
+  matchups: {
+    minimum_sample_size: number;
+    strongest_qualified_matchup: MatchupInsight | null;
+    weakest_qualified_matchup: MatchupInsight | null;
+    most_played_matchup: MatchupInsight | null;
+    matchup_with_most_losses: MatchupInsight | null;
+    matchups_needing_more_data: MatchupInsight[];
+    matchup_records: MatchupInsight[];
+    recent_matchup_trends: MatchupTrend[];
+    best_matchup: string | null;
+    worst_matchup: string | null;
+  };
+  patterns: {
+    top_mistake: MistakePattern | null;
+    overall_mistakes: MistakePattern[];
+    recent_loss_mistakes: MistakePattern[];
+    recent_loss_count: number;
+    practice_priorities: PracticePriority[];
+  };
+  recommendations: CoachingRecommendation[];
+}
+
+export interface MatchupInsight {
+  opponent_character: string;
+  matches: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  qualified: boolean;
+}
+
+export interface MatchupTrend {
+  opponent_character: string;
+  overall_win_rate: number;
+  recent_win_rate: number;
+  previous_win_rate: number;
+  recent_matches: number;
+  previous_matches: number;
+  trend: "improving" | "declining" | "stable";
+}
+
+export interface MistakePattern {
+  tag: string;
+  count: number;
+  losses_analyzed: number;
+  percentage_of_recent_losses: number | null;
+}
+
+export interface PracticePriority {
+  practice_next: string;
+  count: number;
+  losses_analyzed: number;
+}
+
+export interface CoachingRecommendation {
+  type: string;
+  priority: "high" | "medium" | "low";
+  title: string;
+  message: string;
+  evidence: Record<string, unknown>;
+  sample_size: number;
 }

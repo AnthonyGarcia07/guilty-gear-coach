@@ -53,4 +53,28 @@ describe("match submit flows", () => {
     expect(createMatch).not.toHaveBeenCalled();
     expect(navigate).toHaveBeenCalledWith("/matches", { state: { message: "Match updated successfully." } });
   });
+
+  it("returns to the originating oldest-played page after editing", async () => {
+    const createMatch = vi.fn();
+    const updateMatch = vi.fn().mockResolvedValue(match);
+    const navigate = vi.fn();
+
+    await submitMatchUpdate(7, payload, { createMatch, updateMatch }, navigate, "/matches?page=2&sort=oldest_played");
+
+    expect(updateMatch).toHaveBeenCalledTimes(1);
+    expect(createMatch).not.toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledWith("/matches?page=2&sort=oldest_played", { state: { message: "Match updated successfully." } });
+  });
+
+  it("returns to the originating last-updated sort after editing", async () => {
+    const createMatch = vi.fn();
+    const updateMatch = vi.fn().mockResolvedValue(match);
+    const navigate = vi.fn();
+
+    await submitMatchUpdate(7, payload, { createMatch, updateMatch }, navigate, "/matches?sort=last_updated");
+
+    expect(updateMatch).toHaveBeenCalledTimes(1);
+    expect(createMatch).not.toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledWith("/matches?sort=last_updated", { state: { message: "Match updated successfully." } });
+  });
 });

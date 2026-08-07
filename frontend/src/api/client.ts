@@ -1,4 +1,4 @@
-import type { AuthResponse, CoachingInsights, DashboardStats, Match, MatchInput, User } from "../types";
+import type { AuthResponse, CoachingInsights, DashboardStats, Match, MatchInput, MatchListResponse, MatchSort, User } from "../types";
 import { ApiError, normalizeErrorResponse } from "./errors";
 
 const API_URL = (import.meta.env.VITE_API_URL || "/api").replace(/\/$/, "");
@@ -37,7 +37,14 @@ export const api = {
   me: () => request<User>("/users/me"),
   stats: () => request<DashboardStats>("/stats/dashboard"),
   coachingInsights: () => request<CoachingInsights>("/coaching/insights"),
-  listMatches: () => request<Match[]>("/matches"),
+  listMatches: (params: { page?: number; page_size?: number; sort?: MatchSort } = {}) => {
+    const search = new URLSearchParams();
+    if (params.page) search.set("page", String(params.page));
+    if (params.page_size) search.set("page_size", String(params.page_size));
+    if (params.sort) search.set("sort", params.sort);
+    const query = search.toString();
+    return request<MatchListResponse>(`/matches${query ? `?${query}` : ""}`);
+  },
   getMatch: (id: string) => request<Match>(`/matches/${id}`),
   createMatch: (payload: MatchInput) => request<Match>("/matches", { method: "POST", body: JSON.stringify(payload) }),
   updateMatch: (id: number, payload: Partial<MatchInput>) =>

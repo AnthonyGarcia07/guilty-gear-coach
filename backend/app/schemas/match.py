@@ -218,3 +218,12 @@ class MatchRead(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class MatchListResponse(BaseModel):
+    items: list[MatchRead]
+    page: int
+    page_size: int
+    total_items: int
+    total_pages: int
+    sort: Literal["recently_played", "last_updated", "oldest_played"]

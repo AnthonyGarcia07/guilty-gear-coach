@@ -11,7 +11,7 @@ Guilty Gear Coach is a full-stack match tracker and deterministic coaching found
 - Match CRUD API routes scoped to the authenticated user
 - Dashboard stats for total matches, win rate, matchup win rate, mistake tags, loss reasons, and recent matches
 - Manual match form with player character, opponent character, win/loss, set score context, date, rank, duration, notes, mistake tags, strength tags, reason for loss, practice focus, and replay/video filename placeholder
-- Deterministic coaching insights from existing match history only
+- Advanced deterministic coaching insights from existing match history only
 - Focused backend and frontend tests
 
 ## Project Structure
@@ -102,6 +102,19 @@ pytest
 - `GET /api/stats/dashboard`
 - `GET /api/coaching/insights`
 
+## Deterministic Coaching Thresholds
+
+Phase 3 coaching uses manually entered match/set history only. Thresholds are intentionally conservative so the app does not pretend weak evidence is strong evidence:
+
+- Recent performance windows: last 5 sets and last 10 sets.
+- Performance trend: compare the recent 10 sets against the previous 10 sets; a 15 percentage-point change is improving or declining, otherwise stable.
+- Matchup qualification: at least 3 recorded sets against a character before labeling strongest or weakest qualified matchup.
+- Recent matchup trend: at least 6 sets against the same character, comparing the latest 3 against the prior history; a 20 percentage-point change is surfaced.
+- Repeated mistake and practice patterns: at least 2 matching structured tags or exact normalized practice notes.
+- Recommendations: limited to the top 5 evidence-backed findings.
+
+The coaching response is structured into performance, streaks, character usage, matchups, patterns, and recommendations. Recommendations include type, priority, title, message, evidence, and sample size.
+
 ## Product Vision: Stockfish For Guilty Gear Strive
 
 The long-term goal is a "Stockfish for Guilty Gear Strive": structured replay analysis that identifies gameplay decisions, mistakes, strengths, and practice priorities. The current `Match` record represents one completed match or set that the player wants to review. It does not model every game or round yet.
@@ -115,14 +128,15 @@ Terminology:
 
 Future replay-aware architecture may introduce this hierarchy:
 
-- Replay session
+- Replay
 - Set
 - Game
 - Round
 - Gameplay event
-- Analysis finding
+- Deterministic analysis finding
 - Coaching recommendation
+- Optional LLM explanation
 
 Future analysis may eventually identify neutral losses, missed anti-airs, failed punish opportunities, unsafe attacks, burst mistakes, tension or meter usage, defensive habits, repeated mistakes, wall-break decisions, decision quality by timestamp, game-level turning points, and round-level turning points.
 
-The analysis system should produce structured, deterministic findings first. An LLM may later explain those findings in natural language, but it should not invent the underlying gameplay analysis. Do not add replay, game, round, gameplay-event, OpenAI, or external-AI infrastructure until a later phase explicitly calls for it.
+The analysis system should produce structured, deterministic findings first. Phase 3 implements the deterministic finding and recommendation layers using manually entered match data. Future replay analysis should feed richer evidence into the same coaching system rather than replacing it. An LLM may later explain those findings in natural language, but it should not invent the underlying gameplay analysis. Do not add replay, game, round, gameplay-event, OpenAI, or external-AI infrastructure until a later phase explicitly calls for it.

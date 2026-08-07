@@ -14,7 +14,7 @@ export async function submitNewMatch(payload: MatchInput, api: MatchApi, navigat
   navigate("/matches", { state: { message: createdMessage } });
 }
 
-export async function submitMatchUpdate(matchId: number, payload: MatchInput, api: MatchApi, navigate: NavigateFunction) {
+export async function submitMatchUpdate(matchId: number, payload: MatchInput, api: MatchApi, navigate: NavigateFunction, returnTo = "/matches") {
   await api.updateMatch(matchId, payload);
-  navigate("/matches", { state: { message: updatedMessage } });
+  navigate(returnTo, { state: { message: updatedMessage } });
 }

@@ -375,6 +375,13 @@ textarea {
   gap: 12px;
 }
 
+.history-toolbar {
+  display: grid;
+  grid-template-columns: minmax(240px, 520px) minmax(180px, 240px);
+  gap: 14px;
+  align-items: end;
+}
+
 .bar-row {
   grid-template-columns: 190px 1fr 58px;
 }
@@ -397,6 +404,53 @@ textarea {
   background: rgba(255, 255, 255, 0.06);
   color: #dbe2ee;
   padding: 9px 12px;
+}
+
+.coaching-list {
+  margin-top: 16px;
+}
+
+.recommendation-list {
+  display: grid;
+  gap: 12px;
+}
+
+.recommendation-card {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.recommendation-card p {
+  margin: 0;
+  color: #c7cedc;
+}
+
+.priority {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 4px 9px;
+  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.priority.high {
+  background: rgba(242, 63, 84, 0.18);
+  color: #ff9b9b;
+}
+
+.priority.medium {
+  background: rgba(255, 204, 92, 0.16);
+  color: #ffdc87;
+}
+
+.priority.low {
+  background: rgba(56, 211, 159, 0.16);
+  color: #7af0c4;
 }
 
 .chip {
@@ -440,6 +494,39 @@ textarea {
   max-width: 520px;
 }
 
+.pagination {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.pagination button {
+  min-width: 42px;
+  min-height: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #f5f7fb;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.pagination button.active {
+  background: rgba(242, 63, 84, 0.2);
+  border-color: rgba(242, 63, 84, 0.5);
+}
+
+.pagination button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.pagination-ellipsis {
+  color: #9aa5b8;
+  padding: 0 4px;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -481,6 +568,7 @@ textarea {
   .stat-grid,
   .detail-grid,
   .coach-grid,
+  .history-toolbar,
   .form-grid {
     grid-template-columns: 1fr;
   }
