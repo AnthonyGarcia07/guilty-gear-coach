@@ -32,3 +32,4 @@ class Match(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     owner = relationship("User", back_populates="matches")
+    replays = relationship("Replay", back_populates="match", cascade="all, delete-orphan", passive_deletes=True)

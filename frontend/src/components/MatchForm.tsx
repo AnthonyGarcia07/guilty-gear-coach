@@ -14,7 +14,7 @@ const maxPracticeLength = 1000;
 const maxTagLength = 40;
 const maxTags = 12;
 
-type MatchFormState = Omit<MatchInput, "duration_seconds" | "rounds_won" | "rounds_lost" | "first_to"> & {
+export type MatchFormState = Omit<MatchInput, "duration_seconds" | "rounds_won" | "rounds_lost" | "first_to"> & {
   duration_seconds: string;
   rounds_won: string;
   rounds_lost: string;
@@ -61,7 +61,7 @@ function normalizeRankForEdit(rank: string | null | undefined) {
   return rank && striveRanks.includes(rank as (typeof striveRanks)[number]) ? rank : "";
 }
 
-function sanitizeForm(form: MatchFormState): MatchInput {
+export function sanitizeForm(form: MatchFormState): MatchInput {
   return {
     ...form,
     player_character: form.player_character.trim(),
@@ -191,7 +191,6 @@ export function MatchForm({ initial, onSubmit, submitLabel }: { initial?: Match;
       <label className="wide">Reason for loss<input maxLength={maxReasonLength} value={form.reason_for_loss ?? ""} onChange={(event) => setField("reason_for_loss", event.target.value)} placeholder="Lost neutral after backing into corner" />{fieldErrors.reason_for_loss && <span className="field-error">{fieldErrors.reason_for_loss}</span>}</label>
       <label className="wide">Thing to practice next<textarea maxLength={maxPracticeLength} value={form.practice_next ?? ""} onChange={(event) => setField("practice_next", event.target.value)} placeholder="Lab anti-air conversion after 6P counter hit" />{fieldErrors.practice_next && <span className="field-error">{fieldErrors.practice_next}</span>}</label>
       <label className="wide">Notes<textarea maxLength={maxNotesLength} value={form.notes ?? ""} onChange={(event) => setField("notes", event.target.value)} placeholder="What happened in the set?" />{fieldErrors.notes && <span className="field-error">{fieldErrors.notes}</span>}</label>
-      <label className="wide">Replay / video placeholder<input value={form.replay_filename ?? ""} onChange={(event) => setField("replay_filename", event.target.value)} placeholder="my-set-vs-ky.mp4 or replay-id" /></label>
       <button className="primary-button wide" disabled={saving}>{saving ? "Saving..." : submitLabel}</button>
     </form>
   );

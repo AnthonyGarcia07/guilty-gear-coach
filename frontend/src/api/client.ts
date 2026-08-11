@@ -1,4 +1,4 @@
-import type { AuthResponse, CoachingInsights, DashboardStats, Match, MatchInput, MatchListResponse, MatchSort, User } from "../types";
+import type { AuthResponse, CoachingInsights, DashboardStats, Match, MatchInput, MatchListResponse, MatchSort, Replay, ReplayCreateInput, ReplayUpdateInput, User } from "../types";
 import { ApiError, normalizeErrorResponse } from "./errors";
 
 const API_URL = (import.meta.env.VITE_API_URL || "/api").replace(/\/$/, "");
@@ -49,5 +49,11 @@ export const api = {
   createMatch: (payload: MatchInput) => request<Match>("/matches", { method: "POST", body: JSON.stringify(payload) }),
   updateMatch: (id: number, payload: Partial<MatchInput>) =>
     request<Match>(`/matches/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
-  deleteMatch: (id: number) => request<void>(`/matches/${id}`, { method: "DELETE" })
+  deleteMatch: (id: number) => request<void>(`/matches/${id}`, { method: "DELETE" }),
+  listReplays: (matchId: number) => request<Replay[]>(`/matches/${matchId}/replays`),
+  createReplay: (matchId: number, payload: ReplayCreateInput) =>
+    request<Replay>(`/matches/${matchId}/replays`, { method: "POST", body: JSON.stringify(payload) }),
+  updateReplay: (matchId: number, replayId: number, payload: ReplayUpdateInput) =>
+    request<Replay>(`/matches/${matchId}/replays/${replayId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteReplay: (matchId: number, replayId: number) => request<void>(`/matches/${matchId}/replays/${replayId}`, { method: "DELETE" })
 };

@@ -1,5 +1,6 @@
 export type Result = "win" | "loss";
 export type MatchSort = "recently_played" | "last_updated" | "oldest_played";
+export type ReplaySourceType = "replay_file" | "video" | "external_reference";
 
 export interface User {
   id: number;
@@ -35,6 +36,22 @@ export interface Match {
 }
 
 export type MatchInput = Omit<Match, "id" | "created_at" | "updated_at">;
+
+export interface Replay {
+  id: number;
+  match_id: number;
+  source_type: ReplaySourceType;
+  original_filename?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReplayCreateInput {
+  source_type: ReplaySourceType;
+  original_filename?: string | null;
+}
+
+export type ReplayUpdateInput = Partial<ReplayCreateInput>;
 
 export interface MatchListResponse {
   items: Match[];

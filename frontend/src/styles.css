@@ -369,6 +369,17 @@ textarea {
   margin: 0 0 18px;
 }
 
+.section-heading {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.section-heading h2,
+.section-heading p {
+  margin: 0;
+}
+
 .bar-list,
 .match-list {
   display: grid;
@@ -427,6 +438,54 @@ textarea {
 .recommendation-card p {
   margin: 0;
   color: #c7cedc;
+}
+
+.replay-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.replay-list {
+  display: grid;
+  gap: 12px;
+}
+
+.replay-card,
+.replay-create-box {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.replay-card {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.replay-card p {
+  margin: 4px 0 0;
+}
+
+.replay-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: end;
+}
+
+.replay-edit-grid,
+.replay-create-box {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.replay-create-box h3 {
+  margin: 0;
+  grid-column: 1 / -1;
 }
 
 .priority {
@@ -569,6 +628,9 @@ textarea {
   .detail-grid,
   .coach-grid,
   .history-toolbar,
+  .replay-card,
+  .replay-edit-grid,
+  .replay-create-box,
   .form-grid {
     grid-template-columns: 1fr;
   }
