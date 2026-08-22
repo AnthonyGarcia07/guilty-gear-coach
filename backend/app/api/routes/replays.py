@@ -1,13 +1,24 @@
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core.config import Settings, get_settings
 from app.core.database import get_db
 from app.models import Match, Replay, User
-from app.schemas.replay import ReplayCreate, ReplayRead, ReplayUpdate
+from app.schemas.replay import (
+    ReplayCreate,
+    ReplayDownloadUrlResponse,
+    ReplayRead,
+    ReplayUpdate,
+    ReplayUploadConfirmResponse,
+    ReplayUploadInit,
+    ReplayUploadInitResponse,
+)
+from app.services.storage import S3CompatibleStorageService, StorageConfigurationError
 
 router = APIRouter(prefix="/matches/{match_id}/replays", tags=["replays"])
 
@@ -26,6 +37,31 @@ def get_match_replay(match_id: int, replay_id: int, db: Session) -> Replay:
     return replay
 
 
+def get_storage_service(settings: Settings = Depends(get_settings)) -> S3CompatibleStorageService:
+    try:
+        return S3CompatibleStorageService.from_settings(settings)
+    except StorageConfigurationError as error:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Object storage is not configured.") from error
+
+
+def storage_key_for_replay(user_id: int, match_id: int) -> str:
+    return f"users/{user_id}/matches/{match_id}/replays/{uuid4().hex}.mp4"
+
+
+def validate_mp4_size(size_bytes: int | None, max_size: int) -> int:
+    if size_bytes is None or size_bytes <= 0:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="MP4 size must be greater than 0 bytes.")
+    if size_bytes > max_size:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"MP4 size must be {max_size} bytes or less.")
+    return size_bytes
+
+
+def validate_mp4_content_type(content_type: str | None) -> str:
+    if content_type != "video/mp4":
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Content type must be video/mp4.")
+    return content_type
+
+
 @router.get("", response_model=list[ReplayRead])
 def list_replays(match_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[Replay]:
     get_owned_match(match_id, current_user, db)
@@ -42,10 +78,90 @@ def create_replay(match_id: int, payload: ReplayCreate, current_user: User = Dep
     return replay
 
 
+@router.post("/uploads", response_model=ReplayUploadInitResponse, status_code=status.HTTP_201_CREATED)
+def initialize_replay_upload(
+    match_id: int,
+    payload: ReplayUploadInit,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    storage: S3CompatibleStorageService = Depends(get_storage_service),
+) -> ReplayUploadInitResponse:
+    match = get_owned_match(match_id, current_user, db)
+    validate_mp4_content_type(payload.content_type)
+    declared_size = validate_mp4_size(payload.size_bytes, settings.max_mp4_upload_size_bytes)
+    storage_key = storage_key_for_replay(current_user.id, match.id)
+    replay = Replay(
+        match_id=match.id,
+        source_type="video",
+        original_filename=payload.original_filename,
+        storage_key=storage_key,
+        upload_status="pending_upload",
+        content_type=payload.content_type,
+        size_bytes=declared_size,
+    )
+    db.add(replay)
+    db.commit()
+    db.refresh(replay)
+    upload_url = storage.generate_presigned_upload_url(storage_key, content_type=payload.content_type)
+    return ReplayUploadInitResponse(
+        replay=replay,
+        upload_url=upload_url,
+        storage_key=storage_key,
+        expires_in_seconds=storage.presigned_upload_expiration_seconds,
+    )
+
+
 @router.get("/{replay_id}", response_model=ReplayRead)
 def get_replay(match_id: int, replay_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> Replay:
     get_owned_match(match_id, current_user, db)
     return get_match_replay(match_id, replay_id, db)
+
+
+@router.post("/{replay_id}/confirm-upload", response_model=ReplayUploadConfirmResponse)
+def confirm_replay_upload(
+    match_id: int,
+    replay_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    storage: S3CompatibleStorageService = Depends(get_storage_service),
+) -> ReplayUploadConfirmResponse:
+    get_owned_match(match_id, current_user, db)
+    replay = get_match_replay(match_id, replay_id, db)
+    if not replay.storage_key:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Replay does not have a storage object to confirm.")
+    metadata = storage.get_object_metadata(replay.storage_key)
+    if metadata is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Uploaded object was not found in storage.")
+    content_type = validate_mp4_content_type(metadata.content_type)
+    size_bytes = validate_mp4_size(metadata.content_length, settings.max_mp4_upload_size_bytes)
+    replay.upload_status = "uploaded"
+    replay.content_type = content_type
+    replay.size_bytes = size_bytes
+    replay.uploaded_at = datetime.now(timezone.utc)
+    replay.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(replay)
+    return ReplayUploadConfirmResponse(replay=replay)
+
+
+@router.post("/{replay_id}/download-url", response_model=ReplayDownloadUrlResponse)
+def create_replay_download_url(
+    match_id: int,
+    replay_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    storage: S3CompatibleStorageService = Depends(get_storage_service),
+) -> ReplayDownloadUrlResponse:
+    get_owned_match(match_id, current_user, db)
+    replay = get_match_replay(match_id, replay_id, db)
+    if replay.upload_status != "uploaded" or not replay.storage_key:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Replay upload has not been confirmed.")
+    return ReplayDownloadUrlResponse(
+        download_url=storage.generate_presigned_download_url(replay.storage_key),
+        expires_in_seconds=storage.presigned_download_expiration_seconds,
+    )
 
 
 @router.patch("/{replay_id}", response_model=ReplayRead)

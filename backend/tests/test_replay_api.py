@@ -1,11 +1,48 @@
 from datetime import date
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
+from app.api.routes.replays import get_storage_service
 from app.main import app
+from app.services.storage import StorageObjectMetadata
 
 client = TestClient(app)
+
+
+class FakeStorageService:
+    presigned_upload_expiration_seconds = 900
+    presigned_download_expiration_seconds = 300
+
+    def __init__(self, metadata: StorageObjectMetadata | None = None) -> None:
+        self.metadata = metadata
+        self.upload_calls: list[dict] = []
+        self.download_calls: list[str] = []
+        self.head_calls: list[str] = []
+
+    def generate_presigned_upload_url(self, storage_key: str, *, content_type: str = "video/mp4") -> str:
+        self.upload_calls.append({"storage_key": storage_key, "content_type": content_type})
+        return f"https://storage.example/upload/{storage_key}"
+
+    def generate_presigned_download_url(self, storage_key: str) -> str:
+        self.download_calls.append(storage_key)
+        return f"https://storage.example/download/{storage_key}"
+
+    def get_object_metadata(self, storage_key: str) -> StorageObjectMetadata | None:
+        self.head_calls.append(storage_key)
+        return self.metadata
+
+
+@pytest.fixture(autouse=True)
+def clear_dependency_overrides():
+    yield
+    app.dependency_overrides.clear()
+
+
+def install_fake_storage(storage: FakeStorageService) -> FakeStorageService:
+    app.dependency_overrides[get_storage_service] = lambda: storage
+    return storage
 
 
 def signup(prefix: str) -> str:
@@ -62,6 +99,16 @@ def create_replay(token: str, match_id: int, source_type: str = "replay_file", o
     return response.json()
 
 
+def init_upload(token: str, match_id: int, original_filename: str = "set.mp4", content_type: str = "video/mp4", size_bytes: int = 1024) -> dict:
+    response = client.post(
+        f"/api/matches/{match_id}/replays/uploads",
+        json={"original_filename": original_filename, "content_type": content_type, "size_bytes": size_bytes},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
 def test_replay_endpoints_require_authentication():
     token = signup("replay_auth")
     match = create_match(token)
@@ -72,6 +119,9 @@ def test_replay_endpoints_require_authentication():
     assert client.get(f"/api/matches/{match['id']}/replays/{replay['id']}").status_code == 401
     assert client.patch(f"/api/matches/{match['id']}/replays/{replay['id']}", json={"source_type": "video"}).status_code == 401
     assert client.delete(f"/api/matches/{match['id']}/replays/{replay['id']}").status_code == 401
+    assert client.post(f"/api/matches/{match['id']}/replays/uploads", json={"content_type": "video/mp4", "size_bytes": 1024}).status_code == 401
+    assert client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/confirm-upload").status_code == 401
+    assert client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/download-url").status_code == 401
 
 
 def test_create_replay_on_owned_match_sets_match_id_and_trims_filename():
@@ -146,6 +196,81 @@ def test_metadata_create_rejects_client_controlled_storage_fields():
     )
 
     assert response.status_code == 422
+
+
+def test_initialize_mp4_upload_creates_pending_replay_and_presigned_put_url():
+    storage = install_fake_storage(FakeStorageService())
+    token = signup("replay_upload_init")
+    match = create_match(token)
+
+    response = client.post(
+        f"/api/matches/{match['id']}/replays/uploads",
+        json={"original_filename": " set-one.mp4 ", "content_type": "video/mp4", "size_bytes": 4096},
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    replay = body["replay"]
+    assert replay["match_id"] == match["id"]
+    assert replay["source_type"] == "video"
+    assert replay["original_filename"] == "set-one.mp4"
+    assert replay["upload_status"] == "pending_upload"
+    assert replay["content_type"] == "video/mp4"
+    assert replay["size_bytes"] == 4096
+    assert replay["uploaded_at"] is None
+    assert replay["storage_key"] == body["storage_key"]
+    assert replay["storage_key"].startswith(f"users/")
+    assert f"/matches/{match['id']}/replays/" in replay["storage_key"]
+    assert replay["storage_key"].endswith(".mp4")
+    assert body["upload_url"] == f"https://storage.example/upload/{replay['storage_key']}"
+    assert body["expires_in_seconds"] == 900
+    assert storage.upload_calls == [{"storage_key": replay["storage_key"], "content_type": "video/mp4"}]
+
+    stored = client.get(f"/api/matches/{match['id']}/replays/{replay['id']}", headers=auth_headers(token))
+    assert stored.status_code == 200
+    assert stored.json()["upload_status"] == "pending_upload"
+
+
+def test_initialize_mp4_upload_rejects_invalid_content_type_and_size():
+    install_fake_storage(FakeStorageService())
+    token = signup("replay_upload_invalid")
+    match = create_match(token)
+
+    invalid_type = client.post(
+        f"/api/matches/{match['id']}/replays/uploads",
+        json={"original_filename": "set.mov", "content_type": "video/quicktime", "size_bytes": 1024},
+        headers=auth_headers(token),
+    )
+    empty_size = client.post(
+        f"/api/matches/{match['id']}/replays/uploads",
+        json={"original_filename": "set.mp4", "content_type": "video/mp4", "size_bytes": 0},
+        headers=auth_headers(token),
+    )
+    oversize = client.post(
+        f"/api/matches/{match['id']}/replays/uploads",
+        json={"original_filename": "set.mp4", "content_type": "video/mp4", "size_bytes": 2 * 1024 * 1024 * 1024 + 1},
+        headers=auth_headers(token),
+    )
+
+    assert invalid_type.status_code == 422
+    assert empty_size.status_code == 422
+    assert oversize.status_code == 422
+
+
+def test_initialize_mp4_upload_is_account_isolated():
+    install_fake_storage(FakeStorageService())
+    token_a = signup("replay_upload_owner_a")
+    token_b = signup("replay_upload_owner_b")
+    match_b = create_match(token_b)
+
+    response = client.post(
+        f"/api/matches/{match_b['id']}/replays/uploads",
+        json={"original_filename": "steal.mp4", "content_type": "video/mp4", "size_bytes": 1024},
+        headers=auth_headers(token_a),
+    )
+
+    assert response.status_code == 404
 
 
 def test_collection_read_zero_one_multiple_and_ordering():
@@ -285,6 +410,143 @@ def test_filename_only_patch_omits_source_type_without_nulling_it():
     assert response.status_code == 200
     assert response.json()["source_type"] == "external_reference"
     assert response.json()["original_filename"] == "after"
+
+
+def test_confirm_upload_uses_storage_head_and_persists_trusted_metadata():
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=2048, content_type="video/mp4", etag='"etag"', metadata={})))
+    token = signup("replay_confirm")
+    match = create_match(token)
+    upload = init_upload(token, match["id"], size_bytes=1024)
+    replay = upload["replay"]
+
+    response = client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/confirm-upload", headers=auth_headers(token))
+
+    assert response.status_code == 200
+    confirmed = response.json()["replay"]
+    assert confirmed["upload_status"] == "uploaded"
+    assert confirmed["content_type"] == "video/mp4"
+    assert confirmed["size_bytes"] == 2048
+    assert confirmed["uploaded_at"] is not None
+    assert storage.head_calls == [replay["storage_key"]]
+
+    stored = client.get(f"/api/matches/{match['id']}/replays/{replay['id']}", headers=auth_headers(token))
+    assert stored.status_code == 200
+    assert stored.json()["upload_status"] == "uploaded"
+    assert stored.json()["size_bytes"] == 2048
+
+
+def test_confirm_upload_is_safe_to_repeat():
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=2048, content_type="video/mp4", etag='"etag"', metadata={})))
+    token = signup("replay_confirm_repeat")
+    match = create_match(token)
+    upload = init_upload(token, match["id"])
+    replay = upload["replay"]
+
+    first = client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/confirm-upload", headers=auth_headers(token))
+    second = client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/confirm-upload", headers=auth_headers(token))
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["replay"]["upload_status"] == "uploaded"
+
+
+def test_confirm_upload_rejects_missing_or_invalid_object_metadata():
+    token = signup("replay_confirm_invalid")
+    match = create_match(token)
+
+    missing_storage = install_fake_storage(FakeStorageService(None))
+    missing_upload = init_upload(token, match["id"], original_filename="missing.mp4")
+    missing = client.post(f"/api/matches/{match['id']}/replays/{missing_upload['replay']['id']}/confirm-upload", headers=auth_headers(token))
+    assert missing.status_code == 404
+    assert missing_storage.head_calls == [missing_upload["storage_key"]]
+
+    bad_type_storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/webm", etag=None, metadata={})))
+    bad_type_upload = init_upload(token, match["id"], original_filename="bad-type.mp4")
+    bad_type = client.post(f"/api/matches/{match['id']}/replays/{bad_type_upload['replay']['id']}/confirm-upload", headers=auth_headers(token))
+    assert bad_type.status_code == 422
+    assert bad_type_storage.head_calls == [bad_type_upload["storage_key"]]
+
+    bad_size_storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=0, content_type="video/mp4", etag=None, metadata={})))
+    bad_size_upload = init_upload(token, match["id"], original_filename="bad-size.mp4")
+    bad_size = client.post(f"/api/matches/{match['id']}/replays/{bad_size_upload['replay']['id']}/confirm-upload", headers=auth_headers(token))
+    assert bad_size.status_code == 422
+    assert bad_size_storage.head_calls == [bad_size_upload["storage_key"]]
+
+    after_bad_size = client.get(f"/api/matches/{match['id']}/replays/{bad_size_upload['replay']['id']}", headers=auth_headers(token))
+    assert after_bad_size.status_code == 200
+    assert after_bad_size.json()["upload_status"] == "pending_upload"
+    assert after_bad_size.json()["uploaded_at"] is None
+
+
+def test_confirm_upload_requires_replay_with_storage_key():
+    install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    token = signup("replay_confirm_no_key")
+    match = create_match(token)
+    replay = create_replay(token, match["id"], source_type="video", original_filename="metadata-only.mp4")
+
+    response = client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/confirm-upload", headers=auth_headers(token))
+
+    assert response.status_code == 409
+
+
+def test_confirm_upload_is_account_isolated():
+    install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    token_a = signup("replay_confirm_owner_a")
+    token_b = signup("replay_confirm_owner_b")
+    match_b = create_match(token_b)
+    upload_b = init_upload(token_b, match_b["id"])
+
+    response = client.post(f"/api/matches/{match_b['id']}/replays/{upload_b['replay']['id']}/confirm-upload", headers=auth_headers(token_a))
+
+    assert response.status_code == 404
+
+
+def test_download_url_requires_confirmed_upload():
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    token = signup("replay_download_pending")
+    match = create_match(token)
+    upload = init_upload(token, match["id"])
+    replay = upload["replay"]
+
+    response = client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/download-url", headers=auth_headers(token))
+
+    assert response.status_code == 409
+    assert storage.download_calls == []
+
+
+def test_download_url_is_generated_for_confirmed_upload():
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    token = signup("replay_download")
+    match = create_match(token)
+    upload = init_upload(token, match["id"])
+    replay = upload["replay"]
+    confirmed = client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/confirm-upload", headers=auth_headers(token))
+    assert confirmed.status_code == 200
+
+    response = client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/download-url", headers=auth_headers(token))
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "download_url": f"https://storage.example/download/{replay['storage_key']}",
+        "expires_in_seconds": 300,
+    }
+    assert storage.download_calls == [replay["storage_key"]]
+
+
+def test_download_url_is_account_isolated():
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    token_a = signup("replay_download_owner_a")
+    token_b = signup("replay_download_owner_b")
+    match_b = create_match(token_b)
+    upload_b = init_upload(token_b, match_b["id"])
+    replay_b = upload_b["replay"]
+    confirmed = client.post(f"/api/matches/{match_b['id']}/replays/{replay_b['id']}/confirm-upload", headers=auth_headers(token_b))
+    assert confirmed.status_code == 200
+
+    response = client.post(f"/api/matches/{match_b['id']}/replays/{replay_b['id']}/download-url", headers=auth_headers(token_a))
+
+    assert response.status_code == 404
+    assert storage.download_calls == []
 
 
 def test_owner_can_delete_replay_without_deleting_parent_match():

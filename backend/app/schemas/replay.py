@@ -37,6 +37,15 @@ class ReplayUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ReplayUploadInit(BaseModel):
+    original_filename: str | None = Field(default=None, max_length=255)
+    content_type: Literal["video/mp4"]
+    size_bytes: int = Field(gt=0)
+
+    _clean_original_filename = field_validator("original_filename")(clean_optional_filename)
+    model_config = ConfigDict(extra="forbid")
+
+
 class ReplayRead(BaseModel):
     id: int
     match_id: int
@@ -51,3 +60,19 @@ class ReplayRead(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ReplayUploadInitResponse(BaseModel):
+    replay: ReplayRead
+    upload_url: str
+    storage_key: str
+    expires_in_seconds: int
+
+
+class ReplayUploadConfirmResponse(BaseModel):
+    replay: ReplayRead
+
+
+class ReplayDownloadUrlResponse(BaseModel):
+    download_url: str
+    expires_in_seconds: int
