@@ -89,6 +89,11 @@ def test_create_replay_on_owned_match_sets_match_id_and_trims_filename():
     assert body["match_id"] == match["id"]
     assert body["source_type"] == "replay_file"
     assert body["original_filename"] == "set-vs-ky.rep"
+    assert body["storage_key"] is None
+    assert body["upload_status"] == "metadata_only"
+    assert body["content_type"] is None
+    assert body["size_bytes"] is None
+    assert body["uploaded_at"] is None
     assert "created_at" in body
     assert "updated_at" in body
 
@@ -120,6 +125,27 @@ def test_invalid_source_type_and_long_filename_are_rejected():
 
     assert invalid_source.status_code == 422
     assert long_filename.status_code == 422
+
+
+def test_metadata_create_rejects_client_controlled_storage_fields():
+    token = signup("replay_storage_create")
+    match = create_match(token)
+
+    response = client.post(
+        f"/api/matches/{match['id']}/replays",
+        json={
+            "source_type": "video",
+            "original_filename": "set.mp4",
+            "storage_key": "users/1/matches/2/replays/forged.mp4",
+            "upload_status": "uploaded",
+            "content_type": "video/mp4",
+            "size_bytes": 100,
+            "uploaded_at": "2026-08-22T12:00:00Z",
+        },
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 422
 
 
 def test_collection_read_zero_one_multiple_and_ordering():
@@ -216,6 +242,33 @@ def test_patch_invalid_metadata_is_rejected():
     assert long_filename.status_code == 422
     assert null_source.status_code == 422
     assert "Source type cannot be null" in null_source.text
+
+
+def test_metadata_patch_rejects_client_controlled_storage_fields():
+    token = signup("replay_storage_patch")
+    match = create_match(token)
+    replay = create_replay(token, match["id"], source_type="video", original_filename="set.mp4")
+
+    response = client.patch(
+        f"/api/matches/{match['id']}/replays/{replay['id']}",
+        json={
+            "storage_key": "users/1/matches/2/replays/forged.mp4",
+            "upload_status": "uploaded",
+            "content_type": "video/mp4",
+            "size_bytes": 100,
+            "uploaded_at": "2026-08-22T12:00:00Z",
+        },
+        headers=auth_headers(token),
+    )
+    after = client.get(f"/api/matches/{match['id']}/replays/{replay['id']}", headers=auth_headers(token))
+
+    assert response.status_code == 422
+    assert after.status_code == 200
+    assert after.json()["storage_key"] is None
+    assert after.json()["upload_status"] == "metadata_only"
+    assert after.json()["content_type"] is None
+    assert after.json()["size_bytes"] is None
+    assert after.json()["uploaded_at"] is None
 
 
 def test_filename_only_patch_omits_source_type_without_nulling_it():

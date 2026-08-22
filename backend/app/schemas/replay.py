@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ReplaySourceType = Literal["replay_file", "video", "external_reference"]
+ReplayUploadStatus = Literal["metadata_only", "pending_upload", "uploaded"]
 
 
 def clean_optional_filename(value: str | None) -> str | None:
@@ -41,6 +42,11 @@ class ReplayRead(BaseModel):
     match_id: int
     source_type: ReplaySourceType
     original_filename: str | None = None
+    storage_key: str | None = None
+    upload_status: ReplayUploadStatus
+    content_type: str | None = None
+    size_bytes: int | None = Field(default=None, ge=0)
+    uploaded_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

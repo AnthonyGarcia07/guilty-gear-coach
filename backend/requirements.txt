@@ -1,5 +1,6 @@
 alembic==1.13.2
 bcrypt==4.0.1
+boto3==1.34.162
 email-validator==2.2.0
 fastapi==0.111.1
 passlib[bcrypt]==1.7.4

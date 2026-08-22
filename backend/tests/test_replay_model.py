@@ -2,6 +2,7 @@ from datetime import date
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -133,6 +134,84 @@ def test_original_filename_is_nullable(db: Session):
 
     assert replay.original_filename is None
 
+    db.delete(user)
+    db.commit()
+
+
+def test_replay_defaults_to_metadata_only_storage_state(db: Session):
+    user = create_user(db)
+    match = create_match(db, user)
+    replay = Replay(match_id=match.id, source_type="video", original_filename="set.mp4")
+
+    db.add(replay)
+    db.commit()
+    db.refresh(replay)
+
+    assert replay.storage_key is None
+    assert replay.upload_status == "metadata_only"
+    assert replay.content_type is None
+    assert replay.size_bytes is None
+    assert replay.uploaded_at is None
+
+    db.delete(user)
+    db.commit()
+
+
+def test_replay_can_store_upload_backed_mp4_metadata(db: Session):
+    user = create_user(db)
+    match = create_match(db, user)
+    replay = Replay(
+        match_id=match.id,
+        source_type="video",
+        original_filename="set.mp4",
+        storage_key=f"users/{user.id}/matches/{match.id}/replays/{uuid4().hex}.mp4",
+        upload_status="uploaded",
+        content_type="video/mp4",
+        size_bytes=1024,
+    )
+
+    db.add(replay)
+    db.commit()
+    db.refresh(replay)
+
+    assert replay.storage_key is not None
+    assert replay.storage_key.startswith(f"users/{user.id}/matches/{match.id}/replays/")
+    assert replay.upload_status == "uploaded"
+    assert replay.content_type == "video/mp4"
+    assert replay.size_bytes == 1024
+
+    db.delete(user)
+    db.commit()
+
+
+def test_negative_replay_size_is_rejected(db: Session):
+    user = create_user(db)
+    match = create_match(db, user)
+    replay = Replay(match_id=match.id, source_type="video", original_filename="bad.mp4", size_bytes=-1)
+
+    db.add(replay)
+    with pytest.raises(IntegrityError):
+        db.commit()
+
+    db.rollback()
+    db.delete(user)
+    db.commit()
+
+
+def test_storage_key_must_be_unique_when_present(db: Session):
+    user = create_user(db)
+    match = create_match(db, user)
+    storage_key = f"users/{user.id}/matches/{match.id}/replays/{uuid4().hex}.mp4"
+    first = Replay(match_id=match.id, source_type="video", original_filename="one.mp4", storage_key=storage_key)
+    second = Replay(match_id=match.id, source_type="video", original_filename="two.mp4", storage_key=storage_key)
+
+    db.add(first)
+    db.commit()
+    db.add(second)
+    with pytest.raises(IntegrityError):
+        db.commit()
+
+    db.rollback()
     db.delete(user)
     db.commit()
 

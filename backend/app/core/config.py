@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import AnyHttpUrl
+from pydantic import AnyHttpUrl, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,6 +11,14 @@ class Settings(BaseSettings):
     secret_key: str = "change-me-in-production"
     access_token_expire_minutes: int = 60 * 24
     cors_origins: list[AnyHttpUrl] | list[str] = ["http://localhost:5173", "http://localhost:8080"]
+    s3_endpoint_url: str | None = None
+    s3_bucket_name: str | None = None
+    s3_region: str = "auto"
+    s3_access_key_id: str | None = None
+    s3_secret_access_key: str | None = None
+    s3_presigned_upload_expiration_seconds: int = Field(default=15 * 60, gt=0)
+    s3_presigned_download_expiration_seconds: int = Field(default=5 * 60, gt=0)
+    max_mp4_upload_size_bytes: int = Field(default=2 * 1024 * 1024 * 1024, gt=0)
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
