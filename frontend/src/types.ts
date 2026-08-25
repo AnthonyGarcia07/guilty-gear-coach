@@ -1,6 +1,7 @@
 export type Result = "win" | "loss";
 export type MatchSort = "recently_played" | "last_updated" | "oldest_played";
 export type ReplaySourceType = "replay_file" | "video" | "external_reference";
+export type ReplayUploadStatus = "metadata_only" | "pending_upload" | "uploaded";
 
 export interface User {
   id: number;
@@ -42,6 +43,11 @@ export interface Replay {
   match_id: number;
   source_type: ReplaySourceType;
   original_filename?: string | null;
+  storage_key?: string | null;
+  upload_status: ReplayUploadStatus;
+  content_type?: string | null;
+  size_bytes?: number | null;
+  uploaded_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -52,6 +58,28 @@ export interface ReplayCreateInput {
 }
 
 export type ReplayUpdateInput = Partial<ReplayCreateInput>;
+
+export interface ReplayUploadInitInput {
+  original_filename?: string | null;
+  content_type: "video/mp4";
+  size_bytes: number;
+}
+
+export interface ReplayUploadInitResponse {
+  replay: Replay;
+  upload_url: string;
+  storage_key: string;
+  expires_in_seconds: number;
+}
+
+export interface ReplayUploadConfirmResponse {
+  replay: Replay;
+}
+
+export interface ReplayDownloadUrlResponse {
+  download_url: string;
+  expires_in_seconds: number;
+}
 
 export interface MatchListResponse {
   items: Match[];

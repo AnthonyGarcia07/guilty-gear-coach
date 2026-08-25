@@ -1,9 +1,20 @@
 import { useEffect, useState } from "react";
 import { normalizeUnknownError } from "../api/errors";
-import { api } from "../api/client";
-import type { Replay, ReplayCreateInput, ReplaySourceType, ReplayUpdateInput } from "../types";
+import { api, uploadReplayFileToStorage } from "../api/client";
+import type {
+  Replay,
+  ReplayCreateInput,
+  ReplayDownloadUrlResponse,
+  ReplaySourceType,
+  ReplayUpdateInput,
+  ReplayUploadConfirmResponse,
+  ReplayUploadInitInput,
+  ReplayUploadInitResponse,
+  ReplayUploadStatus
+} from "../types";
 
 const maxFilenameLength = 255;
+export const maxMp4UploadSizeBytes = 2 * 1024 * 1024 * 1024;
 const replaySourceOptions: Array<{ value: ReplaySourceType; label: string }> = [
   { value: "replay_file", label: "Replay file" },
   { value: "video", label: "Video" },
@@ -20,6 +31,9 @@ type ReplayApi = {
   createReplay: (matchId: number, payload: ReplayCreateInput) => Promise<Replay>;
   updateReplay: (matchId: number, replayId: number, payload: ReplayUpdateInput) => Promise<Replay>;
   deleteReplay: (matchId: number, replayId: number) => Promise<void>;
+  initializeReplayUpload: (matchId: number, payload: ReplayUploadInitInput) => Promise<ReplayUploadInitResponse>;
+  confirmReplayUpload: (matchId: number, replayId: number) => Promise<ReplayUploadConfirmResponse>;
+  getReplayDownloadUrl: (matchId: number, replayId: number) => Promise<ReplayDownloadUrlResponse>;
 };
 
 const blankReplayForm: ReplayFormState = {
@@ -29,6 +43,30 @@ const blankReplayForm: ReplayFormState = {
 
 export function sourceTypeLabel(sourceType: ReplaySourceType) {
   return replaySourceOptions.find((option) => option.value === sourceType)?.label ?? sourceType;
+}
+
+export function uploadStatusLabel(status: ReplayUploadStatus) {
+  const labels: Record<ReplayUploadStatus, string> = {
+    metadata_only: "Metadata only",
+    pending_upload: "Upload pending",
+    uploaded: "Uploaded video"
+  };
+  return labels[status];
+}
+
+export function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+export function validateMp4File(file: Pick<File, "name" | "size" | "type"> | null) {
+  if (!file) return "Select an MP4 file.";
+  if (file.type !== "video/mp4") return "Replay video must be an MP4 file.";
+  if (file.size <= 0) return "Replay video must be larger than 0 bytes.";
+  if (file.size > maxMp4UploadSizeBytes) return `Replay video must be ${formatFileSize(maxMp4UploadSizeBytes)} or smaller.`;
+  return "";
 }
 
 export function validateReplayForm(form: ReplayFormState) {
@@ -48,12 +86,62 @@ export function replayPayloadFromForm(form: ReplayFormState): ReplayCreateInput 
   };
 }
 
-export function ReplayMetadataSection({ matchId, replayApi = api }: { matchId: number; replayApi?: ReplayApi }) {
+export async function uploadMp4Replay({
+  matchId,
+  file,
+  replayApi,
+  putFile = uploadReplayFileToStorage
+}: {
+  matchId: number;
+  file: File;
+  replayApi: Pick<ReplayApi, "initializeReplayUpload" | "confirmReplayUpload">;
+  putFile?: (uploadUrl: string, file: File) => Promise<void>;
+}) {
+  const initialized = await replayApi.initializeReplayUpload(matchId, {
+    original_filename: file.name,
+    content_type: "video/mp4",
+    size_bytes: file.size
+  });
+  await putFile(initialized.upload_url, file);
+  const confirmed = await replayApi.confirmReplayUpload(matchId, initialized.replay.id);
+  return { initialized, confirmed };
+}
+
+export async function openReplayDownload({
+  matchId,
+  replayId,
+  replayApi,
+  openUrl
+}: {
+  matchId: number;
+  replayId: number;
+  replayApi: Pick<ReplayApi, "getReplayDownloadUrl">;
+  openUrl: (url: string) => void | Window | null;
+}) {
+  const response = await replayApi.getReplayDownloadUrl(matchId, replayId);
+  openUrl(response.download_url);
+  return response;
+}
+
+export function ReplayMetadataSection({
+  matchId,
+  replayApi = api,
+  putFile = uploadReplayFileToStorage,
+  openUrl = (url: string) => window.open(url, "_blank", "noopener,noreferrer")
+}: {
+  matchId: number;
+  replayApi?: ReplayApi;
+  putFile?: (uploadUrl: string, file: File) => Promise<void>;
+  openUrl?: (url: string) => void | Window | null;
+}) {
   const [replays, setReplays] = useState<Replay[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploadFieldError, setUploadFieldError] = useState("");
   const [form, setForm] = useState<ReplayFormState>(blankReplayForm);
   const [fieldError, setFieldError] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -67,6 +155,8 @@ export function ReplayMetadataSection({ matchId, replayApi = api }: { matchId: n
     setSuccess("");
     setReplays([]);
     setEditingId(null);
+    setSelectedFile(null);
+    setUploadFieldError("");
     replayApi.listReplays(matchId).then((items) => {
       if (!active) return;
       setReplays(items);
@@ -135,6 +225,36 @@ export function ReplayMetadataSection({ matchId, replayApi = api }: { matchId: n
     }
   }
 
+  async function handleUpload() {
+    const validation = validateMp4File(selectedFile);
+    setUploadFieldError(validation);
+    setError("");
+    setSuccess("");
+    if (validation || !selectedFile) return;
+
+    setUploading(true);
+    try {
+      const { initialized, confirmed } = await uploadMp4Replay({ matchId, file: selectedFile, replayApi, putFile });
+      setReplays((current) => [...current, initialized.replay].map((item) => (item.id === confirmed.replay.id ? confirmed.replay : item)));
+      setSelectedFile(null);
+      setSuccess("MP4 replay uploaded.");
+    } catch (err) {
+      setError(normalizeUnknownError(err, "Unable to upload MP4 replay.").message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleDownload(replayId: number) {
+    setError("");
+    setSuccess("");
+    try {
+      await openReplayDownload({ matchId, replayId, replayApi, openUrl });
+    } catch (err) {
+      setError(normalizeUnknownError(err, "Unable to open replay video.").message);
+    }
+  }
+
   function startEditing(replay: Replay) {
     setEditingId(replay.id);
     setEditFieldError("");
@@ -156,13 +276,22 @@ export function ReplayMetadataSection({ matchId, replayApi = api }: { matchId: n
       editFieldError={editFieldError}
       editingId={editingId}
       saving={saving}
+      uploading={uploading}
+      selectedFile={selectedFile}
+      uploadFieldError={uploadFieldError}
       onFormChange={setForm}
       onEditFormChange={setEditForm}
+      onFileChange={(file) => {
+        setSelectedFile(file);
+        setUploadFieldError("");
+      }}
+      onUpload={handleUpload}
       onCreate={handleCreate}
       onStartEdit={startEditing}
       onCancelEdit={() => setEditingId(null)}
       onUpdate={handleUpdate}
       onDelete={handleDelete}
+      onDownload={handleDownload}
     />
   );
 }
@@ -178,13 +307,19 @@ export function ReplayMetadataContent({
   editFieldError,
   editingId,
   saving,
+  uploading,
+  selectedFile,
+  uploadFieldError,
   onFormChange,
   onEditFormChange,
+  onFileChange,
+  onUpload,
   onCreate,
   onStartEdit,
   onCancelEdit,
   onUpdate,
-  onDelete
+  onDelete,
+  onDownload
 }: {
   replays: Replay[];
   loading: boolean;
@@ -196,13 +331,19 @@ export function ReplayMetadataContent({
   editFieldError: string;
   editingId: number | null;
   saving: boolean;
+  uploading: boolean;
+  selectedFile: Pick<File, "name" | "size" | "type"> | null;
+  uploadFieldError: string;
   onFormChange: (form: ReplayFormState) => void;
   onEditFormChange: (form: ReplayFormState) => void;
+  onFileChange: (file: File | null) => void;
+  onUpload: () => void;
   onCreate: () => void;
   onStartEdit: (replay: Replay) => void;
   onCancelEdit: () => void;
   onUpdate: (replayId: number) => void;
   onDelete: (replayId: number) => void;
+  onDownload: (replayId: number) => void;
 }) {
   return (
     <section className="panel replay-panel">
@@ -211,7 +352,7 @@ export function ReplayMetadataContent({
           <span className="eyebrow">Replay metadata</span>
           <h2>Replay Sources</h2>
         </div>
-        <p className="muted">Metadata only — no file is uploaded or analyzed in this phase.</p>
+        <p className="muted">Attach metadata or upload an MP4 video. Videos are stored privately and are not analyzed yet.</p>
       </div>
 
       {error && <p className="form-error">{error}</p>}
@@ -235,8 +376,10 @@ export function ReplayMetadataContent({
                   <div>
                     <strong>{sourceTypeLabel(replay.source_type)}</strong>
                     <p className="muted">{replay.original_filename || "No filename or reference saved"}</p>
+                    <p className="muted">{uploadStatusLabel(replay.upload_status)}{replay.size_bytes ? ` · ${formatFileSize(replay.size_bytes)}` : ""}</p>
                   </div>
                   <div className="replay-card-actions">
+                    {replay.upload_status === "uploaded" && replay.storage_key && <button className="secondary-button" type="button" onClick={() => onDownload(replay.id)}>Download video</button>}
                     <button className="secondary-button" type="button" onClick={() => onStartEdit(replay)}>Edit</button>
                     <button className="danger-button" type="button" onClick={() => onDelete(replay.id)}>Delete</button>
                   </div>
@@ -246,6 +389,15 @@ export function ReplayMetadataContent({
           ))}
         </div>
       )}
+
+      <div className="replay-create-box">
+        <h3>Upload MP4 replay video</h3>
+        <label className="wide">MP4 file<input type="file" accept="video/mp4,.mp4" onChange={(event) => onFileChange(event.target.files?.[0] ?? null)} /></label>
+        {selectedFile && <span className="field-hint wide">Selected: {selectedFile.name} · {formatFileSize(selectedFile.size)}</span>}
+        <span className="field-hint wide">The MP4 goes directly to private object storage. Guilty Gear Coach does not analyze video in this phase.</span>
+        {uploadFieldError && <span className="field-error wide">{uploadFieldError}</span>}
+        <button className="primary-button wide" type="button" disabled={uploading} onClick={onUpload}>{uploading ? "Uploading..." : "Upload MP4"}</button>
+      </div>
 
       <div className="replay-create-box">
         <h3>Add replay metadata</h3>

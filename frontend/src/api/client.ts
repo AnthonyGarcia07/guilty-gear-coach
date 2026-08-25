@@ -1,4 +1,20 @@
-import type { AuthResponse, CoachingInsights, DashboardStats, Match, MatchInput, MatchListResponse, MatchSort, Replay, ReplayCreateInput, ReplayUpdateInput, User } from "../types";
+import type {
+  AuthResponse,
+  CoachingInsights,
+  DashboardStats,
+  Match,
+  MatchInput,
+  MatchListResponse,
+  MatchSort,
+  Replay,
+  ReplayCreateInput,
+  ReplayDownloadUrlResponse,
+  ReplayUpdateInput,
+  ReplayUploadConfirmResponse,
+  ReplayUploadInitInput,
+  ReplayUploadInitResponse,
+  User
+} from "../types";
 import { ApiError, normalizeErrorResponse } from "./errors";
 
 const API_URL = (import.meta.env.VITE_API_URL || "/api").replace(/\/$/, "");
@@ -55,5 +71,25 @@ export const api = {
     request<Replay>(`/matches/${matchId}/replays`, { method: "POST", body: JSON.stringify(payload) }),
   updateReplay: (matchId: number, replayId: number, payload: ReplayUpdateInput) =>
     request<Replay>(`/matches/${matchId}/replays/${replayId}`, { method: "PATCH", body: JSON.stringify(payload) }),
-  deleteReplay: (matchId: number, replayId: number) => request<void>(`/matches/${matchId}/replays/${replayId}`, { method: "DELETE" })
+  deleteReplay: (matchId: number, replayId: number) => request<void>(`/matches/${matchId}/replays/${replayId}`, { method: "DELETE" }),
+  initializeReplayUpload: (matchId: number, payload: ReplayUploadInitInput) =>
+    request<ReplayUploadInitResponse>(`/matches/${matchId}/replays/uploads`, { method: "POST", body: JSON.stringify(payload) }),
+  confirmReplayUpload: (matchId: number, replayId: number) =>
+    request<ReplayUploadConfirmResponse>(`/matches/${matchId}/replays/${replayId}/confirm-upload`, { method: "POST" }),
+  getReplayDownloadUrl: (matchId: number, replayId: number) =>
+    request<ReplayDownloadUrlResponse>(`/matches/${matchId}/replays/${replayId}/download-url`, { method: "POST" })
 };
+
+export async function uploadReplayFileToStorage(uploadUrl: string, file: File) {
+  const response = await fetch(uploadUrl, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "video/mp4"
+    },
+    body: file
+  });
+
+  if (!response.ok) {
+    throw new Error("Unable to upload MP4 to storage.");
+  }
+}
