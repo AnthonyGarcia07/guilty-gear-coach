@@ -101,6 +101,76 @@ pytest
 - `DELETE /api/matches/{match_id}`
 - `GET /api/stats/dashboard`
 - `GET /api/coaching/insights`
+- `GET /api/matches/{match_id}/replays`
+- `POST /api/matches/{match_id}/replays`
+- `GET /api/matches/{match_id}/replays/{replay_id}`
+- `PATCH /api/matches/{match_id}/replays/{replay_id}`
+- `DELETE /api/matches/{match_id}/replays/{replay_id}`
+- `POST /api/matches/{match_id}/replays/uploads`
+- `POST /api/matches/{match_id}/replays/{replay_id}/confirm-upload`
+- `POST /api/matches/{match_id}/replays/{replay_id}/download-url`
+
+## Private MP4 Replay Storage
+
+MP4 replay videos are uploaded directly from the browser to private S3-compatible object storage using short-lived presigned URLs. FastAPI remains the authorization/control plane: it verifies `Replay -> Match -> User` ownership, creates storage keys, confirms uploads with object metadata, and issues short-lived download URLs. PostgreSQL stores only Replay metadata and stable private storage keys, never MP4 bytes or temporary presigned URLs.
+
+Cloudflare R2 is the first intended production provider through its S3-compatible API. Keep the R2 bucket private; do not enable public bucket access for replay videos.
+
+Required backend environment variables:
+
+```text
+S3_ENDPOINT_URL=https://<account-id>.r2.cloudflarestorage.com
+S3_BUCKET_NAME=guilty-gear-coach-replays
+S3_REGION=auto
+S3_ACCESS_KEY_ID=<r2-access-key-id>
+S3_SECRET_ACCESS_KEY=<r2-secret-access-key>
+S3_PRESIGNED_UPLOAD_EXPIRATION_SECONDS=900
+S3_PRESIGNED_DOWNLOAD_EXPIRATION_SECONDS=300
+MAX_MP4_UPLOAD_SIZE_BYTES=2147483648
+```
+
+For Docker, place these values in `.env`. The `backend` service reads `.env` through `env_file`, while `DATABASE_URL` is still supplied by `docker-compose.yml` for the local Postgres service. Do not commit real R2 credentials.
+
+Minimum Cloudflare R2 setup:
+
+1. Create or choose a private R2 bucket.
+2. Create R2 API credentials that can put, read, and inspect objects in that bucket.
+3. Set `S3_ENDPOINT_URL` to the account-level S3-compatible endpoint.
+4. Keep `S3_REGION=auto` for R2.
+5. Add a CORS policy to the bucket for the frontend origins that will use presigned URLs.
+
+Local R2 CORS example:
+
+```json
+[
+  {
+    "AllowedOrigins": ["http://localhost:8080", "http://localhost:5173"],
+    "AllowedMethods": ["PUT", "GET"],
+    "AllowedHeaders": ["Content-Type"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+For production, replace the localhost origins with the exact deployed frontend origin, such as `https://app.example.com`. Do not include path components or trailing slashes in `AllowedOrigins`. The implemented browser upload sends a `PUT` request with `Content-Type: video/mp4`; downloads use short-lived presigned `GET` URLs.
+
+Manual end-to-end MP4 verification:
+
+1. Copy `.env.example` to `.env` and fill in real R2 values without committing secrets.
+2. Start the app with `docker compose up --build`.
+3. Sign in and open an existing Match Detail page.
+4. In Replay Sources, select a small `.mp4` file.
+5. Click `Upload MP4`.
+6. In the browser network tools, verify the backend upload initialization request succeeds.
+7. Verify the direct browser `PUT` request to the R2 presigned URL succeeds.
+8. Verify the backend confirmation request succeeds.
+9. Confirm the Replay row displays `Uploaded video` with the file size.
+10. Confirm the object exists in the private R2 bucket.
+11. Click `Download video` and verify the authorized presigned download opens.
+12. Sign in as another user and verify direct backend access to the other user's match/replay/download route returns `404`.
+13. Try a non-MP4 file and confirm the frontend rejects it before upload.
+14. Try a zero-byte or oversized MP4 and confirm it is rejected.
 
 ## Deterministic Coaching Thresholds
 
