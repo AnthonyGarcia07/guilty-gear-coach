@@ -6,8 +6,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.api.routes.replays import delete_storage_object_or_raise, get_optional_storage_service
 from app.core.database import get_db
-from app.models import Match, User
+from app.models import Match, Replay, User
+from app.services.storage import S3CompatibleStorageService
 from app.schemas.match import MatchCreate, MatchListResponse, MatchRead, MatchUpdate, validate_completed_set_score
 from app.services.match_history import (
     DEFAULT_MATCH_PAGE,
@@ -89,9 +91,17 @@ def update_match(match_id: int, payload: MatchUpdate, current_user: User = Depen
 
 
 @router.delete("/{match_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_match(match_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> None:
+def delete_match(
+    match_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    storage: S3CompatibleStorageService | None = Depends(get_optional_storage_service),
+) -> None:
     match = db.get(Match, match_id)
     if not match or match.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found")
+    storage_keys = list(db.scalars(select(Replay.storage_key).where(Replay.match_id == match.id, Replay.storage_key.is_not(None))))
+    for storage_key in storage_keys:
+        delete_storage_object_or_raise(storage_key, storage)
     db.delete(match)
     db.commit()

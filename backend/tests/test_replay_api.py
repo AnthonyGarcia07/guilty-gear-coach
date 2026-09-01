@@ -4,7 +4,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.routes.replays import get_storage_service
+from app.api.routes.replays import get_optional_storage_service, get_storage_service
 from app.main import app
 from app.services.storage import StorageObjectMetadata
 
@@ -15,11 +15,13 @@ class FakeStorageService:
     presigned_upload_expiration_seconds = 900
     presigned_download_expiration_seconds = 300
 
-    def __init__(self, metadata: StorageObjectMetadata | None = None) -> None:
+    def __init__(self, metadata: StorageObjectMetadata | None = None, delete_error: Exception | None = None) -> None:
         self.metadata = metadata
+        self.delete_error = delete_error
         self.upload_calls: list[dict] = []
         self.download_calls: list[str] = []
         self.head_calls: list[str] = []
+        self.delete_calls: list[str] = []
 
     def generate_presigned_upload_url(self, storage_key: str, *, content_type: str = "video/mp4") -> str:
         self.upload_calls.append({"storage_key": storage_key, "content_type": content_type})
@@ -33,6 +35,11 @@ class FakeStorageService:
         self.head_calls.append(storage_key)
         return self.metadata
 
+    def delete_object(self, storage_key: str) -> None:
+        self.delete_calls.append(storage_key)
+        if self.delete_error:
+            raise self.delete_error
+
 
 @pytest.fixture(autouse=True)
 def clear_dependency_overrides():
@@ -42,6 +49,7 @@ def clear_dependency_overrides():
 
 def install_fake_storage(storage: FakeStorageService) -> FakeStorageService:
     app.dependency_overrides[get_storage_service] = lambda: storage
+    app.dependency_overrides[get_optional_storage_service] = lambda: storage
     return storage
 
 
@@ -563,6 +571,67 @@ def test_owner_can_delete_replay_without_deleting_parent_match():
     assert read_match.status_code == 200
 
 
+def test_delete_uploaded_replay_removes_storage_object_before_db_row():
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    token = signup("replay_delete_uploaded")
+    match = create_match(token)
+    upload = init_upload(token, match["id"])
+    replay = upload["replay"]
+    confirmed = client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/confirm-upload", headers=auth_headers(token))
+    assert confirmed.status_code == 200
+
+    deleted = client.delete(f"/api/matches/{match['id']}/replays/{replay['id']}", headers=auth_headers(token))
+    read_deleted = client.get(f"/api/matches/{match['id']}/replays/{replay['id']}", headers=auth_headers(token))
+
+    assert deleted.status_code == 204
+    assert storage.delete_calls == [replay["storage_key"]]
+    assert read_deleted.status_code == 404
+
+
+def test_delete_replay_without_storage_key_skips_storage_cleanup():
+    storage = install_fake_storage(FakeStorageService())
+    token = signup("replay_delete_no_key")
+    match = create_match(token)
+    replay = create_replay(token, match["id"], source_type="video", original_filename="metadata-only.mp4")
+
+    deleted = client.delete(f"/api/matches/{match['id']}/replays/{replay['id']}", headers=auth_headers(token))
+    read_deleted = client.get(f"/api/matches/{match['id']}/replays/{replay['id']}", headers=auth_headers(token))
+
+    assert deleted.status_code == 204
+    assert storage.delete_calls == []
+    assert read_deleted.status_code == 404
+
+
+def test_delete_replay_keeps_db_row_when_storage_cleanup_fails():
+    storage = install_fake_storage(FakeStorageService(delete_error=RuntimeError("R2 unavailable")))
+    token = signup("replay_delete_storage_fail")
+    match = create_match(token)
+    upload = init_upload(token, match["id"])
+    replay = upload["replay"]
+
+    deleted = client.delete(f"/api/matches/{match['id']}/replays/{replay['id']}", headers=auth_headers(token))
+    still_exists = client.get(f"/api/matches/{match['id']}/replays/{replay['id']}", headers=auth_headers(token))
+
+    assert deleted.status_code == 502
+    assert storage.delete_calls == [replay["storage_key"]]
+    assert still_exists.status_code == 200
+
+
+def test_delete_replay_treats_missing_storage_object_as_successful_cleanup():
+    storage = install_fake_storage(FakeStorageService())
+    token = signup("replay_delete_missing_object")
+    match = create_match(token)
+    upload = init_upload(token, match["id"])
+    replay = upload["replay"]
+
+    deleted = client.delete(f"/api/matches/{match['id']}/replays/{replay['id']}", headers=auth_headers(token))
+    read_deleted = client.get(f"/api/matches/{match['id']}/replays/{replay['id']}", headers=auth_headers(token))
+
+    assert deleted.status_code == 204
+    assert storage.delete_calls == [replay["storage_key"]]
+    assert read_deleted.status_code == 404
+
+
 def test_account_isolation_for_nested_replay_routes():
     token_a = signup("replay_account_a")
     token_b = signup("replay_account_b")
@@ -588,6 +657,62 @@ def test_account_isolation_for_nested_replay_routes():
     assert read_response.status_code == 404
     assert update_response.status_code == 404
     assert delete_response.status_code == 404
+
+
+def test_delete_match_removes_all_replay_storage_objects_before_cascade():
+    storage = install_fake_storage(FakeStorageService())
+    token = signup("match_delete_storage")
+    match = create_match(token)
+    first = init_upload(token, match["id"], original_filename="one.mp4")
+    second = init_upload(token, match["id"], original_filename="two.mp4")
+
+    deleted = client.delete(f"/api/matches/{match['id']}", headers=auth_headers(token))
+    read_match = client.get(f"/api/matches/{match['id']}", headers=auth_headers(token))
+    read_first = client.get(f"/api/matches/{match['id']}/replays/{first['replay']['id']}", headers=auth_headers(token))
+    read_second = client.get(f"/api/matches/{match['id']}/replays/{second['replay']['id']}", headers=auth_headers(token))
+
+    assert deleted.status_code == 204
+    assert storage.delete_calls == [first["storage_key"], second["storage_key"]]
+    assert read_match.status_code == 404
+    assert read_first.status_code == 404
+    assert read_second.status_code == 404
+
+
+def test_delete_match_cleans_only_replays_with_storage_keys():
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    token = signup("match_delete_mixed_storage")
+    match = create_match(token)
+    uploaded = init_upload(token, match["id"], original_filename="uploaded.mp4")
+    confirmed = client.post(f"/api/matches/{match['id']}/replays/{uploaded['replay']['id']}/confirm-upload", headers=auth_headers(token))
+    assert confirmed.status_code == 200
+    pending = init_upload(token, match["id"], original_filename="pending.mp4")
+    metadata_only = create_replay(token, match["id"], source_type="external_reference", original_filename="https://example.com")
+
+    deleted = client.delete(f"/api/matches/{match['id']}", headers=auth_headers(token))
+    read_metadata_only = client.get(f"/api/matches/{match['id']}/replays/{metadata_only['id']}", headers=auth_headers(token))
+
+    assert deleted.status_code == 204
+    assert storage.delete_calls == [uploaded["storage_key"], pending["storage_key"]]
+    assert read_metadata_only.status_code == 404
+
+
+def test_delete_match_keeps_match_and_replays_when_storage_cleanup_fails():
+    storage = install_fake_storage(FakeStorageService(delete_error=RuntimeError("R2 unavailable")))
+    token = signup("match_delete_storage_fail")
+    match = create_match(token)
+    upload = init_upload(token, match["id"], original_filename="blocked.mp4")
+    metadata_only = create_replay(token, match["id"], source_type="external_reference", original_filename="https://example.com")
+
+    deleted = client.delete(f"/api/matches/{match['id']}", headers=auth_headers(token))
+    read_match = client.get(f"/api/matches/{match['id']}", headers=auth_headers(token))
+    read_upload = client.get(f"/api/matches/{match['id']}/replays/{upload['replay']['id']}", headers=auth_headers(token))
+    read_metadata_only = client.get(f"/api/matches/{match['id']}/replays/{metadata_only['id']}", headers=auth_headers(token))
+
+    assert deleted.status_code == 502
+    assert storage.delete_calls == [upload["storage_key"]]
+    assert read_match.status_code == 200
+    assert read_upload.status_code == 200
+    assert read_metadata_only.status_code == 200
 
 
 def test_legacy_match_replay_filename_is_not_changed_by_replay_api():

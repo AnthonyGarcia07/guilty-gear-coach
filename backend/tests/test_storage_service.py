@@ -9,6 +9,7 @@ class FakeS3Client:
     def __init__(self, head_response: dict | None = None, head_error: ClientError | None = None) -> None:
         self.presigned_calls: list[dict] = []
         self.head_calls: list[dict] = []
+        self.delete_calls: list[dict] = []
         self.head_response = head_response or {
             "ContentLength": 123,
             "ContentType": "video/mp4",
@@ -26,6 +27,10 @@ class FakeS3Client:
         if self.head_error:
             raise self.head_error
         return self.head_response
+
+    def delete_object(self, Bucket: str, Key: str) -> dict:
+        self.delete_calls.append({"Bucket": Bucket, "Key": Key})
+        return {}
 
 
 def make_service(client: FakeS3Client | None = None) -> S3CompatibleStorageService:
@@ -119,6 +124,15 @@ def test_rejects_blank_storage_keys():
 
     with pytest.raises(ValueError, match="Storage key is required"):
         service.generate_presigned_upload_url(" ")
+
+
+def test_deletes_object_by_storage_key():
+    fake_client = FakeS3Client()
+    service = make_service(fake_client)
+
+    service.delete_object("users/1/matches/2/replays/3.mp4")
+
+    assert fake_client.delete_calls == [{"Bucket": "ggc-replays", "Key": "users/1/matches/2/replays/3.mp4"}]
 
 
 def test_builds_from_settings_without_network_when_client_is_injected():

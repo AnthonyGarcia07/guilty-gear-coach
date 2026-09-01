@@ -19,6 +19,9 @@ class S3Client(Protocol):
     def head_object(self, Bucket: str, Key: str) -> dict[str, Any]:
         ...
 
+    def delete_object(self, Bucket: str, Key: str) -> dict[str, Any]:
+        ...
+
 
 @dataclass(frozen=True)
 class StorageObjectMetadata:
@@ -112,6 +115,9 @@ class S3CompatibleStorageService:
 
     def object_exists(self, storage_key: str) -> bool:
         return self.get_object_metadata(storage_key) is not None
+
+    def delete_object(self, storage_key: str) -> None:
+        self._client.delete_object(Bucket=self.bucket_name, Key=require_storage_key(storage_key))
 
 
 def require_config_value(value: str, name: str) -> str:

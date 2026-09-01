@@ -44,6 +44,24 @@ def get_storage_service(settings: Settings = Depends(get_settings)) -> S3Compati
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Object storage is not configured.") from error
 
 
+def get_optional_storage_service(settings: Settings = Depends(get_settings)) -> S3CompatibleStorageService | None:
+    try:
+        return S3CompatibleStorageService.from_settings(settings)
+    except StorageConfigurationError:
+        return None
+
+
+def delete_storage_object_or_raise(storage_key: str | None, storage: S3CompatibleStorageService | None) -> None:
+    if not storage_key:
+        return
+    if storage is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Object storage is not configured.")
+    try:
+        storage.delete_object(storage_key)
+    except Exception as error:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unable to delete replay object from storage.") from error
+
+
 def storage_key_for_replay(user_id: int, match_id: int) -> str:
     return f"users/{user_id}/matches/{match_id}/replays/{uuid4().hex}.mp4"
 
@@ -177,8 +195,15 @@ def update_replay(match_id: int, replay_id: int, payload: ReplayUpdate, current_
 
 
 @router.delete("/{replay_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_replay(match_id: int, replay_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> None:
+def delete_replay(
+    match_id: int,
+    replay_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    storage: S3CompatibleStorageService | None = Depends(get_optional_storage_service),
+) -> None:
     get_owned_match(match_id, current_user, db)
     replay = get_match_replay(match_id, replay_id, db)
+    delete_storage_object_or_raise(replay.storage_key, storage)
     db.delete(replay)
     db.commit()
