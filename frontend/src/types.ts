@@ -2,6 +2,7 @@ export type Result = "win" | "loss";
 export type MatchSort = "recently_played" | "last_updated" | "oldest_played";
 export type ReplaySourceType = "replay_file" | "video" | "external_reference";
 export type ReplayUploadStatus = "metadata_only" | "pending_upload" | "uploaded";
+export type ReplayProcessingStatus = "not_processed" | "processing" | "processed" | "failed";
 
 export interface User {
   id: number;
@@ -48,6 +49,14 @@ export interface Replay {
   content_type?: string | null;
   size_bytes?: number | null;
   uploaded_at?: string | null;
+  processing_status: ReplayProcessingStatus;
+  processing_error?: string | null;
+  metadata_inspected_at?: string | null;
+  video_duration_seconds?: number | null;
+  video_width?: number | null;
+  video_height?: number | null;
+  video_fps?: number | null;
+  video_codec?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -79,6 +88,10 @@ export interface ReplayUploadConfirmResponse {
 export interface ReplayDownloadUrlResponse {
   download_url: string;
   expires_in_seconds: number;
+}
+
+export interface ReplayInspectResponse {
+  replay: Replay;
 }
 
 export interface MatchListResponse {

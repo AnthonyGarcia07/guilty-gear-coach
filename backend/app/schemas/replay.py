@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 ReplaySourceType = Literal["replay_file", "video", "external_reference"]
 ReplayUploadStatus = Literal["metadata_only", "pending_upload", "uploaded"]
+ReplayProcessingStatus = Literal["not_processed", "processing", "processed", "failed"]
 
 
 def clean_optional_filename(value: str | None) -> str | None:
@@ -56,6 +57,14 @@ class ReplayRead(BaseModel):
     content_type: str | None = None
     size_bytes: int | None = Field(default=None, ge=0)
     uploaded_at: datetime | None = None
+    processing_status: ReplayProcessingStatus
+    processing_error: str | None = None
+    metadata_inspected_at: datetime | None = None
+    video_duration_seconds: float | None = Field(default=None, ge=0)
+    video_width: int | None = Field(default=None, gt=0)
+    video_height: int | None = Field(default=None, gt=0)
+    video_fps: float | None = Field(default=None, gt=0)
+    video_codec: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -76,3 +85,7 @@ class ReplayUploadConfirmResponse(BaseModel):
 class ReplayDownloadUrlResponse(BaseModel):
     download_url: str
     expires_in_seconds: int
+
+
+class ReplayInspectResponse(BaseModel):
+    replay: ReplayRead

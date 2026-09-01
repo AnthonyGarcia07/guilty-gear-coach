@@ -152,6 +152,14 @@ def test_replay_defaults_to_metadata_only_storage_state(db: Session):
     assert replay.content_type is None
     assert replay.size_bytes is None
     assert replay.uploaded_at is None
+    assert replay.processing_status == "not_processed"
+    assert replay.processing_error is None
+    assert replay.metadata_inspected_at is None
+    assert replay.video_duration_seconds is None
+    assert replay.video_width is None
+    assert replay.video_height is None
+    assert replay.video_fps is None
+    assert replay.video_codec is None
 
     db.delete(user)
     db.commit()
@@ -208,6 +216,65 @@ def test_storage_key_must_be_unique_when_present(db: Session):
     db.add(first)
     db.commit()
     db.add(second)
+    with pytest.raises(IntegrityError):
+        db.commit()
+
+    db.rollback()
+    db.delete(user)
+    db.commit()
+
+
+def test_replay_can_store_processed_video_metadata(db: Session):
+    user = create_user(db)
+    match = create_match(db, user)
+    replay = Replay(
+        match_id=match.id,
+        source_type="video",
+        original_filename="set.mp4",
+        storage_key=f"users/{user.id}/matches/{match.id}/replays/{uuid4().hex}.mp4",
+        upload_status="uploaded",
+        content_type="video/mp4",
+        size_bytes=1024,
+        processing_status="processed",
+        video_duration_seconds=95.5,
+        video_width=1920,
+        video_height=1080,
+        video_fps=59.94,
+        video_codec="h264",
+    )
+
+    db.add(replay)
+    db.commit()
+    db.refresh(replay)
+
+    assert replay.processing_status == "processed"
+    assert replay.video_duration_seconds == 95.5
+    assert replay.video_width == 1920
+    assert replay.video_height == 1080
+    assert replay.video_fps == 59.94
+    assert replay.video_codec == "h264"
+
+    db.delete(user)
+    db.commit()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("processing_status", "unknown"),
+        ("video_duration_seconds", -1),
+        ("video_width", 0),
+        ("video_height", 0),
+        ("video_fps", 0),
+    ],
+)
+def test_invalid_replay_processing_metadata_is_rejected(db: Session, field: str, value: object):
+    user = create_user(db)
+    match = create_match(db, user)
+    replay = Replay(match_id=match.id, source_type="video", original_filename="bad.mp4")
+    setattr(replay, field, value)
+
+    db.add(replay)
     with pytest.raises(IntegrityError):
         db.commit()
 

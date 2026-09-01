@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 import boto3
@@ -20,6 +21,9 @@ class S3Client(Protocol):
         ...
 
     def delete_object(self, Bucket: str, Key: str) -> dict[str, Any]:
+        ...
+
+    def download_file(self, Bucket: str, Key: str, Filename: str) -> None:
         ...
 
 
@@ -118,6 +122,9 @@ class S3CompatibleStorageService:
 
     def delete_object(self, storage_key: str) -> None:
         self._client.delete_object(Bucket=self.bucket_name, Key=require_storage_key(storage_key))
+
+    def download_object_to_file(self, storage_key: str, destination: str | Path) -> None:
+        self._client.download_file(self.bucket_name, require_storage_key(storage_key), str(destination))
 
 
 def require_config_value(value: str, name: str) -> str:

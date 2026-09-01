@@ -4,9 +4,10 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.routes.replays import get_optional_storage_service, get_storage_service
+from app.api.routes.replays import get_optional_storage_service, get_storage_service, get_video_inspection_service
 from app.main import app
 from app.services.storage import StorageObjectMetadata
+from app.services.video_inspection import VideoInspectionError, VideoMetadata
 
 client = TestClient(app)
 
@@ -15,13 +16,15 @@ class FakeStorageService:
     presigned_upload_expiration_seconds = 900
     presigned_download_expiration_seconds = 300
 
-    def __init__(self, metadata: StorageObjectMetadata | None = None, delete_error: Exception | None = None) -> None:
+    def __init__(self, metadata: StorageObjectMetadata | None = None, delete_error: Exception | None = None, download_error: Exception | None = None) -> None:
         self.metadata = metadata
         self.delete_error = delete_error
+        self.download_error = download_error
         self.upload_calls: list[dict] = []
         self.download_calls: list[str] = []
         self.head_calls: list[str] = []
         self.delete_calls: list[str] = []
+        self.download_file_calls: list[dict] = []
 
     def generate_presigned_upload_url(self, storage_key: str, *, content_type: str = "video/mp4") -> str:
         self.upload_calls.append({"storage_key": storage_key, "content_type": content_type})
@@ -40,6 +43,24 @@ class FakeStorageService:
         if self.delete_error:
             raise self.delete_error
 
+    def download_object_to_file(self, storage_key: str, destination: str) -> None:
+        self.download_file_calls.append({"storage_key": storage_key, "destination": destination})
+        if self.download_error:
+            raise self.download_error
+
+
+class FakeVideoInspectionService:
+    def __init__(self, metadata: VideoMetadata | None = None, error: VideoInspectionError | None = None) -> None:
+        self.metadata = metadata or VideoMetadata(duration_seconds=123.456, width=1920, height=1080, fps=59.94, codec="h264")
+        self.error = error
+        self.inspect_calls: list[str] = []
+
+    def inspect(self, video_path: str) -> VideoMetadata:
+        self.inspect_calls.append(video_path)
+        if self.error:
+            raise self.error
+        return self.metadata
+
 
 @pytest.fixture(autouse=True)
 def clear_dependency_overrides():
@@ -51,6 +72,11 @@ def install_fake_storage(storage: FakeStorageService) -> FakeStorageService:
     app.dependency_overrides[get_storage_service] = lambda: storage
     app.dependency_overrides[get_optional_storage_service] = lambda: storage
     return storage
+
+
+def install_fake_inspector(inspector: FakeVideoInspectionService) -> FakeVideoInspectionService:
+    app.dependency_overrides[get_video_inspection_service] = lambda: inspector
+    return inspector
 
 
 def signup(prefix: str) -> str:
@@ -130,6 +156,7 @@ def test_replay_endpoints_require_authentication():
     assert client.post(f"/api/matches/{match['id']}/replays/uploads", json={"content_type": "video/mp4", "size_bytes": 1024}).status_code == 401
     assert client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/confirm-upload").status_code == 401
     assert client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/download-url").status_code == 401
+    assert client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/inspect").status_code == 401
 
 
 def test_create_replay_on_owned_match_sets_match_id_and_trims_filename():
@@ -555,6 +582,149 @@ def test_download_url_is_account_isolated():
 
     assert response.status_code == 404
     assert storage.download_calls == []
+
+
+def test_metadata_only_and_pending_replays_cannot_be_inspected():
+    install_fake_storage(FakeStorageService())
+    install_fake_inspector(FakeVideoInspectionService())
+    token = signup("replay_inspect_unavailable")
+    match = create_match(token)
+    metadata_only = create_replay(token, match["id"], source_type="video", original_filename="metadata-only.mp4")
+    pending = init_upload(token, match["id"], original_filename="pending.mp4")
+
+    metadata_response = client.post(f"/api/matches/{match['id']}/replays/{metadata_only['id']}/inspect", headers=auth_headers(token))
+    pending_response = client.post(f"/api/matches/{match['id']}/replays/{pending['replay']['id']}/inspect", headers=auth_headers(token))
+
+    assert metadata_response.status_code == 409
+    assert pending_response.status_code == 409
+
+
+def test_confirmed_uploaded_replay_can_be_inspected_and_persists_video_metadata():
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    inspector = install_fake_inspector(FakeVideoInspectionService(VideoMetadata(duration_seconds=93.25, width=1280, height=720, fps=60.0, codec="h264")))
+    token = signup("replay_inspect_success")
+    match = create_match(token)
+    upload = init_upload(token, match["id"])
+    replay = upload["replay"]
+    confirmed = client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/confirm-upload", headers=auth_headers(token))
+    assert confirmed.status_code == 200
+
+    response = client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/inspect", headers=auth_headers(token))
+    stored = client.get(f"/api/matches/{match['id']}/replays/{replay['id']}", headers=auth_headers(token))
+
+    assert response.status_code == 200
+    inspected = response.json()["replay"]
+    assert inspected["processing_status"] == "processed"
+    assert inspected["processing_error"] is None
+    assert inspected["metadata_inspected_at"] is not None
+    assert inspected["video_duration_seconds"] == 93.25
+    assert inspected["video_width"] == 1280
+    assert inspected["video_height"] == 720
+    assert inspected["video_fps"] == 60.0
+    assert inspected["video_codec"] == "h264"
+    assert storage.download_file_calls[0]["storage_key"] == replay["storage_key"]
+    assert len(inspector.inspect_calls) == 1
+    assert stored.json()["processing_status"] == "processed"
+
+
+def test_inspect_replay_is_account_isolated():
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    install_fake_inspector(FakeVideoInspectionService())
+    token_a = signup("replay_inspect_owner_a")
+    token_b = signup("replay_inspect_owner_b")
+    match_b = create_match(token_b)
+    upload_b = init_upload(token_b, match_b["id"])
+    confirmed = client.post(f"/api/matches/{match_b['id']}/replays/{upload_b['replay']['id']}/confirm-upload", headers=auth_headers(token_b))
+    assert confirmed.status_code == 200
+
+    response = client.post(f"/api/matches/{match_b['id']}/replays/{upload_b['replay']['id']}/inspect", headers=auth_headers(token_a))
+
+    assert response.status_code == 404
+    assert storage.download_file_calls == []
+
+
+def test_inspection_failure_persists_failed_state_and_safe_error():
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    install_fake_inspector(FakeVideoInspectionService(error=VideoInspectionError("No usable video stream was found.")))
+    token = signup("replay_inspect_fail")
+    match = create_match(token)
+    upload = init_upload(token, match["id"])
+    replay = upload["replay"]
+    confirmed = client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/confirm-upload", headers=auth_headers(token))
+    assert confirmed.status_code == 200
+
+    response = client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/inspect", headers=auth_headers(token))
+    stored = client.get(f"/api/matches/{match['id']}/replays/{replay['id']}", headers=auth_headers(token)).json()
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "No usable video stream was found."
+    assert stored["processing_status"] == "failed"
+    assert stored["processing_error"] == "No usable video stream was found."
+    assert stored["upload_status"] == "uploaded"
+
+
+def test_inspection_timeout_persists_failed_state_and_safe_error():
+    install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    install_fake_inspector(FakeVideoInspectionService(error=VideoInspectionError("Video metadata inspection timed out.")))
+    token = signup("replay_inspect_timeout")
+    match = create_match(token)
+    upload = init_upload(token, match["id"])
+    replay = upload["replay"]
+    confirmed = client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/confirm-upload", headers=auth_headers(token))
+    assert confirmed.status_code == 200
+
+    response = client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/inspect", headers=auth_headers(token))
+    stored = client.get(f"/api/matches/{match['id']}/replays/{replay['id']}", headers=auth_headers(token)).json()
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Video metadata inspection timed out."
+    assert stored["processing_status"] == "failed"
+    assert stored["processing_error"] == "Video metadata inspection timed out."
+
+
+def test_reinspection_replaces_old_technical_metadata():
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    inspector = install_fake_inspector(FakeVideoInspectionService(VideoMetadata(duration_seconds=90.0, width=1280, height=720, fps=60.0, codec="h264")))
+    token = signup("replay_reinspect")
+    match = create_match(token)
+    upload = init_upload(token, match["id"])
+    replay = upload["replay"]
+    confirmed = client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/confirm-upload", headers=auth_headers(token))
+    assert confirmed.status_code == 200
+    first = client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/inspect", headers=auth_headers(token))
+    assert first.status_code == 200
+
+    inspector.metadata = VideoMetadata(duration_seconds=120.0, width=1920, height=1080, fps=59.94, codec="hevc")
+    second = client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/inspect", headers=auth_headers(token))
+
+    assert second.status_code == 200
+    inspected = second.json()["replay"]
+    assert inspected["video_duration_seconds"] == 120.0
+    assert inspected["video_width"] == 1920
+    assert inspected["video_height"] == 1080
+    assert inspected["video_fps"] == 59.94
+    assert inspected["video_codec"] == "hevc"
+    assert len(storage.download_file_calls) == 2
+
+
+def test_storage_access_failure_during_inspection_is_safe():
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={}), download_error=RuntimeError("R2 unavailable")))
+    inspector = install_fake_inspector(FakeVideoInspectionService())
+    token = signup("replay_inspect_storage_fail")
+    match = create_match(token)
+    upload = init_upload(token, match["id"])
+    replay = upload["replay"]
+    confirmed = client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/confirm-upload", headers=auth_headers(token))
+    assert confirmed.status_code == 200
+
+    response = client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/inspect", headers=auth_headers(token))
+    stored = client.get(f"/api/matches/{match['id']}/replays/{replay['id']}", headers=auth_headers(token)).json()
+
+    assert response.status_code == 502
+    assert stored["processing_status"] == "failed"
+    assert stored["processing_error"] == "Unable to access replay video for inspection."
+    assert storage.download_file_calls[0]["storage_key"] == replay["storage_key"]
+    assert inspector.inspect_calls == []
 
 
 def test_owner_can_delete_replay_without_deleting_parent_match():

@@ -59,6 +59,8 @@ Health: http://localhost:8000/health
 
 The backend container runs `alembic upgrade head` on startup.
 
+After backend Dockerfile changes, rebuild the backend image so tools such as `ffprobe` are available inside the container.
+
 ## Local Development
 
 Backend:
@@ -81,6 +83,8 @@ npm run dev
 ```
 
 Set `VITE_API_URL=http://localhost:8000/api` if your API runs somewhere else.
+
+Local video metadata inspection requires `ffprobe` to be available on the backend `PATH`.
 
 ## Tests
 
@@ -109,6 +113,7 @@ pytest
 - `POST /api/matches/{match_id}/replays/uploads`
 - `POST /api/matches/{match_id}/replays/{replay_id}/confirm-upload`
 - `POST /api/matches/{match_id}/replays/{replay_id}/download-url`
+- `POST /api/matches/{match_id}/replays/{replay_id}/inspect`
 
 ## Private MP4 Replay Storage
 
@@ -154,6 +159,8 @@ Local R2 CORS example:
 ```
 
 For production, replace the localhost origins with the exact deployed frontend origin, such as `https://app.example.com`. Do not include path components or trailing slashes in `AllowedOrigins`. The implemented browser upload sends a `PUT` request with `Content-Type: video/mp4`; downloads use short-lived presigned `GET` URLs.
+
+Uploaded MP4 replay videos can be inspected with `ffprobe` for technical metadata such as duration, resolution, frame rate, and codec. This is metadata inspection only; it does not perform gameplay analysis, frame extraction, OCR, AI, or coaching from video content.
 
 Manual end-to-end MP4 verification:
 

@@ -2,8 +2,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
   ReplayMetadataContent,
+  formatDuration,
   formatFileSize,
   openReplayDownload,
+  processingStatusLabel,
   replayDeleteConfirmation,
   replayPayloadFromForm,
   sourceTypeLabel,
@@ -25,6 +27,14 @@ function makeReplay(overrides: Partial<Replay> = {}): Replay {
     content_type: null,
     size_bytes: null,
     uploaded_at: null,
+    processing_status: "not_processed",
+    processing_error: null,
+    metadata_inspected_at: null,
+    video_duration_seconds: null,
+    video_width: null,
+    video_height: null,
+    video_fps: null,
+    video_codec: null,
     created_at: "2026-08-09T12:00:00Z",
     updated_at: "2026-08-09T12:00:00Z",
     ...overrides
@@ -55,8 +65,10 @@ function renderContent(overrides: Partial<Parameters<typeof ReplayMetadataConten
     onCancelEdit: vi.fn(),
     onUpdate: vi.fn(),
     deleting: false,
+    inspectingId: null,
     onRequestDelete: vi.fn(),
     onDownload: vi.fn(),
+    onInspect: vi.fn(),
     ...overrides
   };
 
@@ -95,6 +107,7 @@ describe("ReplayMetadataSection", () => {
     expect(html).toContain("Uploaded video");
     expect(html).toContain("2.0 KB");
     expect(html).toContain("Download video");
+    expect(html).toContain("Inspect metadata");
   });
 
   it("builds create and update payloads with trimmed optional filenames", () => {
@@ -143,14 +156,13 @@ describe("ReplayMetadataSection", () => {
     });
   });
 
-  it("renders real MP4 upload UI without claiming analysis is available", () => {
+  it("renders real MP4 upload UI without claiming gameplay analysis is available", () => {
     const html = renderContent({ replays: [makeReplay()] });
 
     expect(html).toContain("type=\"file\"");
     expect(html).toContain("accept=\"video/mp4,.mp4\"");
     expect(html).toContain("Upload MP4");
-    expect(html).not.toContain("Processing");
-    expect(html).not.toContain("Analyzing");
+    expect(html).not.toContain("gameplay analysis is available");
     expect(html).not.toContain("Ready for analysis");
   });
 
@@ -178,6 +190,60 @@ describe("ReplayMetadataSection", () => {
     expect(uploadStatusLabel("metadata_only")).toBe("Metadata only");
     expect(uploadStatusLabel("pending_upload")).toBe("Upload pending");
     expect(uploadStatusLabel("uploaded")).toBe("Uploaded video");
+  });
+
+  it("maps processing status labels exactly", () => {
+    expect(processingStatusLabel("not_processed")).toBe("Not inspected");
+    expect(processingStatusLabel("processing")).toBe("Inspecting metadata");
+    expect(processingStatusLabel("processed")).toBe("Metadata inspected");
+    expect(processingStatusLabel("failed")).toBe("Inspection failed");
+  });
+
+  it("formats inspected technical video metadata", () => {
+    const html = renderContent({
+      replays: [
+        makeReplay({
+          source_type: "video",
+          upload_status: "uploaded",
+          storage_key: "users/1/matches/7/replays/set.mp4",
+          processing_status: "processed",
+          video_duration_seconds: 93.25,
+          video_width: 1280,
+          video_height: 720,
+          video_fps: 59.94,
+          video_codec: "h264"
+        })
+      ]
+    });
+
+    expect(html).toContain("Metadata inspected");
+    expect(html).toContain("Duration: 1m 33s");
+    expect(html).toContain("Resolution: 1280×720");
+    expect(html).toContain("FPS: 59.94");
+    expect(html).toContain("Codec: h264");
+  });
+
+  it("shows safe inspection failure messages", () => {
+    const html = renderContent({
+      replays: [
+        makeReplay({
+          source_type: "video",
+          upload_status: "uploaded",
+          storage_key: "users/1/matches/7/replays/set.mp4",
+          processing_status: "failed",
+          processing_error: "No usable video stream was found."
+        })
+      ]
+    });
+
+    expect(html).toContain("Inspection failed");
+    expect(html).toContain("No usable video stream was found.");
+    expect(html).not.toContain("[object Object]");
+  });
+
+  it("formats durations for replay metadata display", () => {
+    expect(formatDuration(42)).toBe("42s");
+    expect(formatDuration(93.25)).toBe("1m 33s");
   });
 
   it("runs successful initialization, direct PUT, and confirmation flow", async () => {

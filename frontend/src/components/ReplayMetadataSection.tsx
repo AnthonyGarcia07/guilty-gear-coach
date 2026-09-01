@@ -6,6 +6,8 @@ import type {
   Replay,
   ReplayCreateInput,
   ReplayDownloadUrlResponse,
+  ReplayInspectResponse,
+  ReplayProcessingStatus,
   ReplaySourceType,
   ReplayUpdateInput,
   ReplayUploadConfirmResponse,
@@ -41,6 +43,7 @@ type ReplayApi = {
   initializeReplayUpload: (matchId: number, payload: ReplayUploadInitInput) => Promise<ReplayUploadInitResponse>;
   confirmReplayUpload: (matchId: number, replayId: number) => Promise<ReplayUploadConfirmResponse>;
   getReplayDownloadUrl: (matchId: number, replayId: number) => Promise<ReplayDownloadUrlResponse>;
+  inspectReplay: (matchId: number, replayId: number) => Promise<ReplayInspectResponse>;
 };
 
 const blankReplayForm: ReplayFormState = {
@@ -57,6 +60,16 @@ export function uploadStatusLabel(status: ReplayUploadStatus) {
     metadata_only: "Metadata only",
     pending_upload: "Upload pending",
     uploaded: "Uploaded video"
+  };
+  return labels[status];
+}
+
+export function processingStatusLabel(status: ReplayProcessingStatus) {
+  const labels: Record<ReplayProcessingStatus, string> = {
+    not_processed: "Not inspected",
+    processing: "Inspecting metadata",
+    processed: "Metadata inspected",
+    failed: "Inspection failed"
   };
   return labels[status];
 }
@@ -147,6 +160,7 @@ export function ReplayMetadataSection({
   const [success, setSuccess] = useState("");
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [inspectingId, setInspectingId] = useState<number | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadFieldError, setUploadFieldError] = useState("");
   const [form, setForm] = useState<ReplayFormState>(blankReplayForm);
@@ -166,6 +180,7 @@ export function ReplayMetadataSection({
     setEditingId(null);
     setDeleteReplayId(null);
     setDeleting(false);
+    setInspectingId(null);
     setSelectedFile(null);
     setUploadFieldError("");
     replayApi.listReplays(matchId).then((items) => {
@@ -269,6 +284,22 @@ export function ReplayMetadataSection({
     }
   }
 
+  async function handleInspect(replayId: number) {
+    setError("");
+    setSuccess("");
+    setInspectingId(replayId);
+    try {
+      const response = await replayApi.inspectReplay(matchId, replayId);
+      setReplays((current) => current.map((item) => (item.id === response.replay.id ? response.replay : item)));
+      setSuccess("Video metadata inspected.");
+    } catch (err) {
+      const normalized = normalizeUnknownError(err, "Unable to inspect video metadata.");
+      setError(normalized.message);
+    } finally {
+      setInspectingId(null);
+    }
+  }
+
   function startEditing(replay: Replay) {
     setEditingId(replay.id);
     setEditFieldError("");
@@ -293,6 +324,7 @@ export function ReplayMetadataSection({
         saving={saving}
         deleting={deleting}
         uploading={uploading}
+        inspectingId={inspectingId}
         selectedFile={selectedFile}
         uploadFieldError={uploadFieldError}
         onFormChange={setForm}
@@ -308,6 +340,7 @@ export function ReplayMetadataSection({
         onUpdate={handleUpdate}
         onRequestDelete={setDeleteReplayId}
         onDownload={handleDownload}
+        onInspect={handleInspect}
       />
       {deleteReplayId !== null && (
         <ConfirmDialog
@@ -336,6 +369,7 @@ export function ReplayMetadataContent({
   saving,
   deleting,
   uploading,
+  inspectingId,
   selectedFile,
   uploadFieldError,
   onFormChange,
@@ -347,7 +381,8 @@ export function ReplayMetadataContent({
   onCancelEdit,
   onUpdate,
   onRequestDelete,
-  onDownload
+  onDownload,
+  onInspect
 }: {
   replays: Replay[];
   loading: boolean;
@@ -361,6 +396,7 @@ export function ReplayMetadataContent({
   saving: boolean;
   deleting: boolean;
   uploading: boolean;
+  inspectingId: number | null;
   selectedFile: Pick<File, "name" | "size" | "type"> | null;
   uploadFieldError: string;
   onFormChange: (form: ReplayFormState) => void;
@@ -373,6 +409,7 @@ export function ReplayMetadataContent({
   onUpdate: (replayId: number) => void;
   onRequestDelete: (replayId: number) => void;
   onDownload: (replayId: number) => void;
+  onInspect: (replayId: number) => void;
 }) {
   return (
     <section className="panel replay-panel">
@@ -406,9 +443,20 @@ export function ReplayMetadataContent({
                     <strong>{sourceTypeLabel(replay.source_type)}</strong>
                     <p className="muted">{replay.original_filename || "No filename or reference saved"}</p>
                     <p className="muted">{uploadStatusLabel(replay.upload_status)}{replay.size_bytes ? ` · ${formatFileSize(replay.size_bytes)}` : ""}</p>
+                    <p className="muted">{processingStatusLabel(replay.processing_status)}</p>
+                    {replay.processing_status === "processed" && (
+                      <p className="muted">
+                        {replay.video_duration_seconds !== null && replay.video_duration_seconds !== undefined ? `Duration: ${formatDuration(replay.video_duration_seconds)} · ` : ""}
+                        {replay.video_width && replay.video_height ? `Resolution: ${replay.video_width}×${replay.video_height} · ` : ""}
+                        {replay.video_fps ? `FPS: ${replay.video_fps} · ` : ""}
+                        {replay.video_codec ? `Codec: ${replay.video_codec}` : ""}
+                      </p>
+                    )}
+                    {replay.processing_status === "failed" && replay.processing_error && <p className="form-error">{replay.processing_error}</p>}
                   </div>
                   <div className="replay-card-actions">
                     {replay.upload_status === "uploaded" && replay.storage_key && <button className="secondary-button" type="button" onClick={() => onDownload(replay.id)}>Download video</button>}
+                    {replay.upload_status === "uploaded" && replay.storage_key && <button className="secondary-button" type="button" disabled={inspectingId === replay.id} onClick={() => onInspect(replay.id)}>{inspectingId === replay.id ? "Inspecting..." : "Inspect metadata"}</button>}
                     <button className="secondary-button" type="button" onClick={() => onStartEdit(replay)}>Edit</button>
                     <button className="danger-button" type="button" disabled={deleting} onClick={() => onRequestDelete(replay.id)}>Delete</button>
                   </div>
@@ -437,6 +485,13 @@ export function ReplayMetadataContent({
       </div>
     </section>
   );
+}
+
+export function formatDuration(seconds: number) {
+  const rounded = Math.round(seconds);
+  const minutes = Math.floor(rounded / 60);
+  const remainingSeconds = rounded % 60;
+  return minutes > 0 ? `${minutes}m ${remainingSeconds}s` : `${remainingSeconds}s`;
 }
 
 function ReplayFields({ form, onChange }: { form: ReplayFormState; onChange: (form: ReplayFormState) => void }) {

@@ -9,6 +9,7 @@ import type {
   Replay,
   ReplayCreateInput,
   ReplayDownloadUrlResponse,
+  ReplayInspectResponse,
   ReplayUpdateInput,
   ReplayUploadConfirmResponse,
   ReplayUploadInitInput,
@@ -77,7 +78,9 @@ export const api = {
   confirmReplayUpload: (matchId: number, replayId: number) =>
     request<ReplayUploadConfirmResponse>(`/matches/${matchId}/replays/${replayId}/confirm-upload`, { method: "POST" }),
   getReplayDownloadUrl: (matchId: number, replayId: number) =>
-    request<ReplayDownloadUrlResponse>(`/matches/${matchId}/replays/${replayId}/download-url`, { method: "POST" })
+    request<ReplayDownloadUrlResponse>(`/matches/${matchId}/replays/${replayId}/download-url`, { method: "POST" }),
+  inspectReplay: (matchId: number, replayId: number) =>
+    request<ReplayInspectResponse>(`/matches/${matchId}/replays/${replayId}/inspect`, { method: "POST" })
 };
 
 export async function uploadReplayFileToStorage(uploadUrl: string, file: File) {

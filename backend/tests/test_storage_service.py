@@ -10,6 +10,7 @@ class FakeS3Client:
         self.presigned_calls: list[dict] = []
         self.head_calls: list[dict] = []
         self.delete_calls: list[dict] = []
+        self.download_file_calls: list[dict] = []
         self.head_response = head_response or {
             "ContentLength": 123,
             "ContentType": "video/mp4",
@@ -31,6 +32,9 @@ class FakeS3Client:
     def delete_object(self, Bucket: str, Key: str) -> dict:
         self.delete_calls.append({"Bucket": Bucket, "Key": Key})
         return {}
+
+    def download_file(self, Bucket: str, Key: str, Filename: str) -> None:
+        self.download_file_calls.append({"Bucket": Bucket, "Key": Key, "Filename": Filename})
 
 
 def make_service(client: FakeS3Client | None = None) -> S3CompatibleStorageService:
@@ -133,6 +137,17 @@ def test_deletes_object_by_storage_key():
     service.delete_object("users/1/matches/2/replays/3.mp4")
 
     assert fake_client.delete_calls == [{"Bucket": "ggc-replays", "Key": "users/1/matches/2/replays/3.mp4"}]
+
+
+def test_downloads_object_to_local_file_path():
+    fake_client = FakeS3Client()
+    service = make_service(fake_client)
+
+    service.download_object_to_file("users/1/matches/2/replays/3.mp4", "/tmp/replay.mp4")
+
+    assert fake_client.download_file_calls == [
+        {"Bucket": "ggc-replays", "Key": "users/1/matches/2/replays/3.mp4", "Filename": "/tmp/replay.mp4"}
+    ]
 
 
 def test_builds_from_settings_without_network_when_client_is_injected():

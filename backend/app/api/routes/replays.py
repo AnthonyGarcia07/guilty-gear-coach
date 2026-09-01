@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -13,12 +14,14 @@ from app.schemas.replay import (
     ReplayCreate,
     ReplayDownloadUrlResponse,
     ReplayRead,
+    ReplayInspectResponse,
     ReplayUpdate,
     ReplayUploadConfirmResponse,
     ReplayUploadInit,
     ReplayUploadInitResponse,
 )
 from app.services.storage import S3CompatibleStorageService, StorageConfigurationError
+from app.services.video_inspection import FFprobeVideoInspectionService, VideoInspectionError
 
 router = APIRouter(prefix="/matches/{match_id}/replays", tags=["replays"])
 
@@ -49,6 +52,10 @@ def get_optional_storage_service(settings: Settings = Depends(get_settings)) -> 
         return S3CompatibleStorageService.from_settings(settings)
     except StorageConfigurationError:
         return None
+
+
+def get_video_inspection_service() -> FFprobeVideoInspectionService:
+    return FFprobeVideoInspectionService()
 
 
 def delete_storage_object_or_raise(storage_key: str | None, storage: S3CompatibleStorageService | None) -> None:
@@ -180,6 +187,60 @@ def create_replay_download_url(
         download_url=storage.generate_presigned_download_url(replay.storage_key),
         expires_in_seconds=storage.presigned_download_expiration_seconds,
     )
+
+
+@router.post("/{replay_id}/inspect", response_model=ReplayInspectResponse)
+def inspect_replay_video_metadata(
+    match_id: int,
+    replay_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    storage: S3CompatibleStorageService = Depends(get_storage_service),
+    inspector: FFprobeVideoInspectionService = Depends(get_video_inspection_service),
+) -> ReplayInspectResponse:
+    get_owned_match(match_id, current_user, db)
+    replay = get_match_replay(match_id, replay_id, db)
+    if replay.upload_status != "uploaded" or not replay.storage_key:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Replay upload must be confirmed before inspection.")
+
+    replay.processing_status = "processing"
+    replay.processing_error = None
+    replay.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(replay)
+
+    try:
+        with TemporaryDirectory() as temporary_directory:
+            video_path = f"{temporary_directory}/replay.mp4"
+            storage.download_object_to_file(replay.storage_key, video_path)
+            metadata = inspector.inspect(video_path)
+    except VideoInspectionError as error:
+        mark_inspection_failed(db, replay, error.public_message)
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=error.public_message) from error
+    except Exception as error:
+        mark_inspection_failed(db, replay, "Unable to access replay video for inspection.")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unable to access replay video for inspection.") from error
+
+    replay.processing_status = "processed"
+    replay.processing_error = None
+    replay.metadata_inspected_at = datetime.now(timezone.utc)
+    replay.video_duration_seconds = metadata.duration_seconds
+    replay.video_width = metadata.width
+    replay.video_height = metadata.height
+    replay.video_fps = metadata.fps
+    replay.video_codec = metadata.codec
+    replay.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(replay)
+    return ReplayInspectResponse(replay=replay)
+
+
+def mark_inspection_failed(db: Session, replay: Replay, message: str) -> None:
+    replay.processing_status = "failed"
+    replay.processing_error = message[:255]
+    replay.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(replay)
 
 
 @router.patch("/{replay_id}", response_model=ReplayRead)
