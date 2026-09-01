@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { normalizeUnknownError } from "../api/errors";
 import { api, uploadReplayFileToStorage } from "../api/client";
+import { ConfirmDialog } from "./ConfirmDialog";
 import type {
   Replay,
   ReplayCreateInput,
@@ -20,6 +21,12 @@ const replaySourceOptions: Array<{ value: ReplaySourceType; label: string }> = [
   { value: "video", label: "Video" },
   { value: "external_reference", label: "External reference" }
 ];
+
+export const replayDeleteConfirmation = {
+  title: "Delete replay?",
+  message: "This will permanently delete this replay and its uploaded video. This action cannot be undone.",
+  confirmLabel: "Delete Replay"
+};
 
 type ReplayFormState = {
   source_type: ReplaySourceType;
@@ -145,6 +152,8 @@ export function ReplayMetadataSection({
   const [form, setForm] = useState<ReplayFormState>(blankReplayForm);
   const [fieldError, setFieldError] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [deleteReplayId, setDeleteReplayId] = useState<number | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [editForm, setEditForm] = useState<ReplayFormState>(blankReplayForm);
   const [editFieldError, setEditFieldError] = useState("");
 
@@ -155,6 +164,8 @@ export function ReplayMetadataSection({
     setSuccess("");
     setReplays([]);
     setEditingId(null);
+    setDeleteReplayId(null);
+    setDeleting(false);
     setSelectedFile(null);
     setUploadFieldError("");
     replayApi.listReplays(matchId).then((items) => {
@@ -212,16 +223,19 @@ export function ReplayMetadataSection({
   }
 
   async function handleDelete(replayId: number) {
-    const confirmed = window.confirm("Delete this replay metadata? The parent match will not be deleted.");
-    if (!confirmed) return;
     setError("");
     setSuccess("");
+    setDeleting(true);
     try {
       await replayApi.deleteReplay(matchId, replayId);
       setReplays((current) => current.filter((item) => item.id !== replayId));
+      setDeleteReplayId(null);
       setSuccess("Replay metadata deleted.");
     } catch (err) {
       setError(normalizeUnknownError(err, "Unable to delete replay metadata.").message);
+      setDeleteReplayId(null);
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -265,34 +279,47 @@ export function ReplayMetadataSection({
   }
 
   return (
-    <ReplayMetadataContent
-      replays={replays}
-      loading={loading}
-      error={error}
-      success={success}
-      form={form}
-      fieldError={fieldError}
-      editForm={editForm}
-      editFieldError={editFieldError}
-      editingId={editingId}
-      saving={saving}
-      uploading={uploading}
-      selectedFile={selectedFile}
-      uploadFieldError={uploadFieldError}
-      onFormChange={setForm}
-      onEditFormChange={setEditForm}
-      onFileChange={(file) => {
-        setSelectedFile(file);
-        setUploadFieldError("");
-      }}
-      onUpload={handleUpload}
-      onCreate={handleCreate}
-      onStartEdit={startEditing}
-      onCancelEdit={() => setEditingId(null)}
-      onUpdate={handleUpdate}
-      onDelete={handleDelete}
-      onDownload={handleDownload}
-    />
+    <>
+      <ReplayMetadataContent
+        replays={replays}
+        loading={loading}
+        error={error}
+        success={success}
+        form={form}
+        fieldError={fieldError}
+        editForm={editForm}
+        editFieldError={editFieldError}
+        editingId={editingId}
+        saving={saving}
+        deleting={deleting}
+        uploading={uploading}
+        selectedFile={selectedFile}
+        uploadFieldError={uploadFieldError}
+        onFormChange={setForm}
+        onEditFormChange={setEditForm}
+        onFileChange={(file) => {
+          setSelectedFile(file);
+          setUploadFieldError("");
+        }}
+        onUpload={handleUpload}
+        onCreate={handleCreate}
+        onStartEdit={startEditing}
+        onCancelEdit={() => setEditingId(null)}
+        onUpdate={handleUpdate}
+        onRequestDelete={setDeleteReplayId}
+        onDownload={handleDownload}
+      />
+      {deleteReplayId !== null && (
+        <ConfirmDialog
+          title={replayDeleteConfirmation.title}
+          message={replayDeleteConfirmation.message}
+          confirmLabel={replayDeleteConfirmation.confirmLabel}
+          confirming={deleting}
+          onCancel={() => setDeleteReplayId(null)}
+          onConfirm={() => handleDelete(deleteReplayId)}
+        />
+      )}
+    </>
   );
 }
 
@@ -307,6 +334,7 @@ export function ReplayMetadataContent({
   editFieldError,
   editingId,
   saving,
+  deleting,
   uploading,
   selectedFile,
   uploadFieldError,
@@ -318,7 +346,7 @@ export function ReplayMetadataContent({
   onStartEdit,
   onCancelEdit,
   onUpdate,
-  onDelete,
+  onRequestDelete,
   onDownload
 }: {
   replays: Replay[];
@@ -331,6 +359,7 @@ export function ReplayMetadataContent({
   editFieldError: string;
   editingId: number | null;
   saving: boolean;
+  deleting: boolean;
   uploading: boolean;
   selectedFile: Pick<File, "name" | "size" | "type"> | null;
   uploadFieldError: string;
@@ -342,7 +371,7 @@ export function ReplayMetadataContent({
   onStartEdit: (replay: Replay) => void;
   onCancelEdit: () => void;
   onUpdate: (replayId: number) => void;
-  onDelete: (replayId: number) => void;
+  onRequestDelete: (replayId: number) => void;
   onDownload: (replayId: number) => void;
 }) {
   return (
@@ -381,7 +410,7 @@ export function ReplayMetadataContent({
                   <div className="replay-card-actions">
                     {replay.upload_status === "uploaded" && replay.storage_key && <button className="secondary-button" type="button" onClick={() => onDownload(replay.id)}>Download video</button>}
                     <button className="secondary-button" type="button" onClick={() => onStartEdit(replay)}>Edit</button>
-                    <button className="danger-button" type="button" onClick={() => onDelete(replay.id)}>Delete</button>
+                    <button className="danger-button" type="button" disabled={deleting} onClick={() => onRequestDelete(replay.id)}>Delete</button>
                   </div>
                 </>
               )}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldRenderMatchForRoute } from "./MatchDetail";
+import { matchDeleteConfirmation, shouldRenderMatchForRoute } from "./MatchDetail";
 import type { Match } from "../types";
 
 function makeMatch(id: number): Match {
@@ -37,5 +37,13 @@ describe("MatchDetail route identity rendering", () => {
   it("uses the loading state when no route-matching match is available", () => {
     expect(shouldRenderMatchForRoute(null, "2")).toBe(false);
     expect(shouldRenderMatchForRoute(makeMatch(1), undefined)).toBe(false);
+  });
+
+  it("uses destructive match delete confirmation wording", () => {
+    expect(matchDeleteConfirmation).toEqual({
+      title: "Delete match?",
+      message: "This will permanently delete this match and all associated replay videos. This action cannot be undone.",
+      confirmLabel: "Delete Match"
+    });
   });
 });

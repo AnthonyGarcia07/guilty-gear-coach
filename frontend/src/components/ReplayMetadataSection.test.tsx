@@ -4,6 +4,7 @@ import {
   ReplayMetadataContent,
   formatFileSize,
   openReplayDownload,
+  replayDeleteConfirmation,
   replayPayloadFromForm,
   sourceTypeLabel,
   uploadMp4Replay,
@@ -53,7 +54,8 @@ function renderContent(overrides: Partial<Parameters<typeof ReplayMetadataConten
     onStartEdit: vi.fn(),
     onCancelEdit: vi.fn(),
     onUpdate: vi.fn(),
-    onDelete: vi.fn(),
+    deleting: false,
+    onRequestDelete: vi.fn(),
     onDownload: vi.fn(),
     ...overrides
   };
@@ -131,6 +133,14 @@ describe("ReplayMetadataSection", () => {
     expect(html).toContain("Unable to add replay metadata.");
     expect(html).toContain("Replay metadata added.");
     expect(html).not.toContain("[object Object]");
+  });
+
+  it("uses destructive replay delete confirmation wording", () => {
+    expect(replayDeleteConfirmation).toEqual({
+      title: "Delete replay?",
+      message: "This will permanently delete this replay and its uploaded video. This action cannot be undone.",
+      confirmLabel: "Delete Replay"
+    });
   });
 
   it("renders real MP4 upload UI without claiming analysis is available", () => {
