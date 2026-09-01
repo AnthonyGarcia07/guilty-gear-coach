@@ -89,3 +89,9 @@ class ReplayDownloadUrlResponse(BaseModel):
 
 class ReplayInspectResponse(BaseModel):
     replay: ReplayRead
+
+
+class ReplayFrameSampleRequest(BaseModel):
+    timestamp_seconds: float = Field(ge=0)
+
+    model_config = ConfigDict(allow_inf_nan=False, extra="forbid")

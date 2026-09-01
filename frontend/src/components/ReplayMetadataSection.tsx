@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { normalizeUnknownError } from "../api/errors";
 import { api, uploadReplayFileToStorage } from "../api/client";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -44,6 +44,7 @@ type ReplayApi = {
   confirmReplayUpload: (matchId: number, replayId: number) => Promise<ReplayUploadConfirmResponse>;
   getReplayDownloadUrl: (matchId: number, replayId: number) => Promise<ReplayDownloadUrlResponse>;
   inspectReplay: (matchId: number, replayId: number) => Promise<ReplayInspectResponse>;
+  sampleReplayFrame: (matchId: number, replayId: number, timestampSeconds: number) => Promise<Blob>;
 };
 
 const blankReplayForm: ReplayFormState = {
@@ -97,6 +98,44 @@ export function validateReplayForm(form: ReplayFormState) {
     return `Original filename must be ${maxFilenameLength} characters or fewer.`;
   }
   return "";
+}
+
+export function validateFrameTimestampInput(value: string, durationSeconds: number | null | undefined) {
+  const trimmed = value.trim();
+  if (!trimmed) return "Enter a timestamp in seconds.";
+  const timestamp = Number(trimmed);
+  if (!Number.isFinite(timestamp) || timestamp < 0) return "Timestamp must be a number greater than or equal to 0.";
+  if (durationSeconds === null || durationSeconds === undefined) return "Inspect video metadata before sampling a frame.";
+  if (timestamp >= durationSeconds) return "Timestamp must be before the end of the video.";
+  return "";
+}
+
+export function replaceSampleFrameUrl({
+  current,
+  replayId,
+  blob,
+  createObjectURL,
+  revokeObjectURL
+}: {
+  current: Record<number, string>;
+  replayId: number;
+  blob: Blob;
+  createObjectURL: (blob: Blob) => string;
+  revokeObjectURL: (url: string) => void;
+}) {
+  const previousUrl = current[replayId];
+  if (previousUrl) revokeObjectURL(previousUrl);
+  return { ...current, [replayId]: createObjectURL(blob) };
+}
+
+export function canSampleFrame(replay: Replay) {
+  return (
+    replay.upload_status === "uploaded" &&
+    Boolean(replay.storage_key) &&
+    replay.processing_status === "processed" &&
+    replay.video_duration_seconds !== null &&
+    replay.video_duration_seconds !== undefined
+  );
 }
 
 export function replayPayloadFromForm(form: ReplayFormState): ReplayCreateInput {
@@ -161,6 +200,11 @@ export function ReplayMetadataSection({
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [inspectingId, setInspectingId] = useState<number | null>(null);
+  const [samplingId, setSamplingId] = useState<number | null>(null);
+  const [sampleTimestamps, setSampleTimestamps] = useState<Record<number, string>>({});
+  const [sampleErrors, setSampleErrors] = useState<Record<number, string>>({});
+  const [sampleFrameUrls, setSampleFrameUrls] = useState<Record<number, string>>({});
+  const sampleFrameUrlsRef = useRef<Record<number, string>>({});
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadFieldError, setUploadFieldError] = useState("");
   const [form, setForm] = useState<ReplayFormState>(blankReplayForm);
@@ -181,6 +225,13 @@ export function ReplayMetadataSection({
     setDeleteReplayId(null);
     setDeleting(false);
     setInspectingId(null);
+    setSamplingId(null);
+    setSampleTimestamps({});
+    setSampleErrors({});
+    updateSampleFrameUrls((current) => {
+      Object.values(current).forEach((url) => URL.revokeObjectURL(url));
+      return {};
+    });
     setSelectedFile(null);
     setUploadFieldError("");
     replayApi.listReplays(matchId).then((items) => {
@@ -196,6 +247,20 @@ export function ReplayMetadataSection({
       active = false;
     };
   }, [matchId, replayApi]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(sampleFrameUrlsRef.current).forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, []);
+
+  function updateSampleFrameUrls(updater: (current: Record<number, string>) => Record<number, string>) {
+    setSampleFrameUrls((current) => {
+      const next = updater(current);
+      sampleFrameUrlsRef.current = next;
+      return next;
+    });
+  }
 
   async function handleCreate() {
     const validation = validateReplayForm(form);
@@ -300,6 +365,31 @@ export function ReplayMetadataSection({
     }
   }
 
+  async function handleSampleFrame(replay: Replay) {
+    const timestampInput = sampleTimestamps[replay.id] ?? "";
+    const validation = validateFrameTimestampInput(timestampInput, replay.video_duration_seconds);
+    setSampleErrors((current) => ({ ...current, [replay.id]: validation }));
+    setError("");
+    setSuccess("");
+    if (validation) return;
+
+    setSamplingId(replay.id);
+    try {
+      const blob = await replayApi.sampleReplayFrame(matchId, replay.id, Number(timestampInput.trim()));
+      updateSampleFrameUrls((current) => replaceSampleFrameUrl({
+        current,
+        replayId: replay.id,
+        blob,
+        createObjectURL: URL.createObjectURL,
+        revokeObjectURL: URL.revokeObjectURL
+      }));
+    } catch (err) {
+      setSampleErrors((current) => ({ ...current, [replay.id]: normalizeUnknownError(err, "Unable to sample replay frame.").message }));
+    } finally {
+      setSamplingId(null);
+    }
+  }
+
   function startEditing(replay: Replay) {
     setEditingId(replay.id);
     setEditFieldError("");
@@ -325,6 +415,10 @@ export function ReplayMetadataSection({
         deleting={deleting}
         uploading={uploading}
         inspectingId={inspectingId}
+        samplingId={samplingId}
+        sampleTimestamps={sampleTimestamps}
+        sampleErrors={sampleErrors}
+        sampleFrameUrls={sampleFrameUrls}
         selectedFile={selectedFile}
         uploadFieldError={uploadFieldError}
         onFormChange={setForm}
@@ -341,6 +435,11 @@ export function ReplayMetadataSection({
         onRequestDelete={setDeleteReplayId}
         onDownload={handleDownload}
         onInspect={handleInspect}
+        onSampleTimestampChange={(replayId, value) => {
+          setSampleTimestamps((current) => ({ ...current, [replayId]: value }));
+          setSampleErrors((current) => ({ ...current, [replayId]: "" }));
+        }}
+        onSampleFrame={handleSampleFrame}
       />
       {deleteReplayId !== null && (
         <ConfirmDialog
@@ -370,6 +469,10 @@ export function ReplayMetadataContent({
   deleting,
   uploading,
   inspectingId,
+  samplingId,
+  sampleTimestamps,
+  sampleErrors,
+  sampleFrameUrls,
   selectedFile,
   uploadFieldError,
   onFormChange,
@@ -382,7 +485,9 @@ export function ReplayMetadataContent({
   onUpdate,
   onRequestDelete,
   onDownload,
-  onInspect
+  onInspect,
+  onSampleTimestampChange,
+  onSampleFrame
 }: {
   replays: Replay[];
   loading: boolean;
@@ -397,6 +502,10 @@ export function ReplayMetadataContent({
   deleting: boolean;
   uploading: boolean;
   inspectingId: number | null;
+  samplingId: number | null;
+  sampleTimestamps: Record<number, string>;
+  sampleErrors: Record<number, string>;
+  sampleFrameUrls: Record<number, string>;
   selectedFile: Pick<File, "name" | "size" | "type"> | null;
   uploadFieldError: string;
   onFormChange: (form: ReplayFormState) => void;
@@ -410,6 +519,8 @@ export function ReplayMetadataContent({
   onRequestDelete: (replayId: number) => void;
   onDownload: (replayId: number) => void;
   onInspect: (replayId: number) => void;
+  onSampleTimestampChange: (replayId: number, value: string) => void;
+  onSampleFrame: (replay: Replay) => void;
 }) {
   return (
     <section className="panel replay-panel">
@@ -453,6 +564,24 @@ export function ReplayMetadataContent({
                       </p>
                     )}
                     {replay.processing_status === "failed" && replay.processing_error && <p className="form-error">{replay.processing_error}</p>}
+                    {canSampleFrame(replay) && (
+                      <div className="frame-sample-box">
+                        <label>
+                          Timestamp seconds
+                          <input
+                            inputMode="decimal"
+                            placeholder="10"
+                            value={sampleTimestamps[replay.id] ?? ""}
+                            onChange={(event) => onSampleTimestampChange(replay.id, event.target.value)}
+                          />
+                        </label>
+                        <button className="secondary-button" type="button" disabled={samplingId === replay.id} onClick={() => onSampleFrame(replay)}>
+                          {samplingId === replay.id ? "Sampling..." : "Sample frame"}
+                        </button>
+                        {sampleErrors[replay.id] && <span className="field-error wide">{sampleErrors[replay.id]}</span>}
+                        {sampleFrameUrls[replay.id] && <img className="sampled-frame" src={sampleFrameUrls[replay.id]} alt={`Sampled frame from ${replay.original_filename || "replay"}`} />}
+                      </div>
+                    )}
                   </div>
                   <div className="replay-card-actions">
                     {replay.upload_status === "uploaded" && replay.storage_key && <button className="secondary-button" type="button" onClick={() => onDownload(replay.id)}>Download video</button>}

@@ -1,8 +1,9 @@
 from datetime import datetime, timezone
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -13,6 +14,7 @@ from app.models import Match, Replay, User
 from app.schemas.replay import (
     ReplayCreate,
     ReplayDownloadUrlResponse,
+    ReplayFrameSampleRequest,
     ReplayRead,
     ReplayInspectResponse,
     ReplayUpdate,
@@ -21,6 +23,7 @@ from app.schemas.replay import (
     ReplayUploadInitResponse,
 )
 from app.services.storage import S3CompatibleStorageService, StorageConfigurationError
+from app.services.frame_extraction import FFmpegFrameExtractionService, FrameExtractionError
 from app.services.video_inspection import FFprobeVideoInspectionService, VideoInspectionError
 
 router = APIRouter(prefix="/matches/{match_id}/replays", tags=["replays"])
@@ -56,6 +59,10 @@ def get_optional_storage_service(settings: Settings = Depends(get_settings)) -> 
 
 def get_video_inspection_service() -> FFprobeVideoInspectionService:
     return FFprobeVideoInspectionService()
+
+
+def get_frame_extraction_service() -> FFmpegFrameExtractionService:
+    return FFmpegFrameExtractionService()
 
 
 def delete_storage_object_or_raise(storage_key: str | None, storage: S3CompatibleStorageService | None) -> None:
@@ -241,6 +248,56 @@ def mark_inspection_failed(db: Session, replay: Replay, message: str) -> None:
     replay.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(replay)
+
+
+@router.post("/{replay_id}/frames/sample")
+def sample_replay_frame(
+    match_id: int,
+    replay_id: int,
+    payload: ReplayFrameSampleRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    storage: S3CompatibleStorageService = Depends(get_storage_service),
+    extractor: FFmpegFrameExtractionService = Depends(get_frame_extraction_service),
+) -> Response:
+    get_owned_match(match_id, current_user, db)
+    replay = get_match_replay(match_id, replay_id, db)
+    validate_frame_sampling_replay(replay)
+    timestamp_seconds = validate_frame_timestamp(payload.timestamp_seconds, replay.video_duration_seconds)
+
+    try:
+        with TemporaryDirectory() as temporary_directory:
+            video_path = Path(temporary_directory) / "replay.mp4"
+            frame_path = Path(temporary_directory) / "frame.jpg"
+            storage.download_object_to_file(replay.storage_key, video_path)
+            extractor.extract_jpeg_frame(video_path, timestamp_seconds, frame_path)
+            frame_bytes = frame_path.read_bytes()
+    except FrameExtractionError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=error.public_message) from error
+    except Exception as error:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unable to sample replay frame.") from error
+
+    if not frame_bytes:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Frame extraction did not produce an image.")
+    return Response(content=frame_bytes, media_type="image/jpeg")
+
+
+def validate_frame_sampling_replay(replay: Replay) -> None:
+    if replay.upload_status != "uploaded" or not replay.storage_key:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Replay upload must be confirmed before frame sampling.")
+    if replay.processing_status != "processed" or replay.video_duration_seconds is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Replay video metadata must be inspected before frame sampling.")
+
+
+def validate_frame_timestamp(timestamp_seconds: float, video_duration_seconds: float | None) -> float:
+    if video_duration_seconds is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Replay video duration is not available.")
+    if timestamp_seconds >= video_duration_seconds:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Timestamp must be before the end of the video.",
+        )
+    return timestamp_seconds
 
 
 @router.patch("/{replay_id}", response_model=ReplayRead)

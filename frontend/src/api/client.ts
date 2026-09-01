@@ -46,6 +46,26 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function requestBlob(path: string, options: RequestInit = {}): Promise<Blob> {
+  const token = localStorage.getItem("ggc_token");
+  const customHeaders = (options.headers ?? {}) as Record<string, string>;
+  const response = await fetch(`${API_URL}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...customHeaders
+    }
+  });
+
+  if (!response.ok) {
+    const parsed = await normalizeErrorResponse(response);
+    throw new ApiError(response.status, parsed.message, parsed.fieldErrors);
+  }
+
+  return response.blob();
+}
+
 export const api = {
   signup: (payload: { email: string; username: string; password: string }) =>
     request<AuthResponse>("/auth/signup", { method: "POST", body: JSON.stringify(payload) }),
@@ -80,7 +100,9 @@ export const api = {
   getReplayDownloadUrl: (matchId: number, replayId: number) =>
     request<ReplayDownloadUrlResponse>(`/matches/${matchId}/replays/${replayId}/download-url`, { method: "POST" }),
   inspectReplay: (matchId: number, replayId: number) =>
-    request<ReplayInspectResponse>(`/matches/${matchId}/replays/${replayId}/inspect`, { method: "POST" })
+    request<ReplayInspectResponse>(`/matches/${matchId}/replays/${replayId}/inspect`, { method: "POST" }),
+  sampleReplayFrame: (matchId: number, replayId: number, timestampSeconds: number) =>
+    requestBlob(`/matches/${matchId}/replays/${replayId}/frames/sample`, { method: "POST", body: JSON.stringify({ timestamp_seconds: timestampSeconds }) })
 };
 
 export async function uploadReplayFileToStorage(uploadUrl: string, file: File) {

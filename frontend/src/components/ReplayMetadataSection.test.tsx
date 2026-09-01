@@ -2,15 +2,18 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
   ReplayMetadataContent,
+  canSampleFrame,
   formatDuration,
   formatFileSize,
   openReplayDownload,
   processingStatusLabel,
   replayDeleteConfirmation,
   replayPayloadFromForm,
+  replaceSampleFrameUrl,
   sourceTypeLabel,
   uploadMp4Replay,
   uploadStatusLabel,
+  validateFrameTimestampInput,
   validateMp4File,
   validateReplayForm
 } from "./ReplayMetadataSection";
@@ -66,9 +69,15 @@ function renderContent(overrides: Partial<Parameters<typeof ReplayMetadataConten
     onUpdate: vi.fn(),
     deleting: false,
     inspectingId: null,
+    samplingId: null,
+    sampleTimestamps: {},
+    sampleErrors: {},
+    sampleFrameUrls: {},
     onRequestDelete: vi.fn(),
     onDownload: vi.fn(),
     onInspect: vi.fn(),
+    onSampleTimestampChange: vi.fn(),
+    onSampleFrame: vi.fn(),
     ...overrides
   };
 
@@ -244,6 +253,88 @@ describe("ReplayMetadataSection", () => {
   it("formats durations for replay metadata display", () => {
     expect(formatDuration(42)).toBe("42s");
     expect(formatDuration(93.25)).toBe("1m 33s");
+  });
+
+  it("shows sample frame controls only for uploaded inspected replays", () => {
+    const unavailable = renderContent({
+      replays: [
+        makeReplay({
+          source_type: "video",
+          upload_status: "uploaded",
+          storage_key: "users/1/matches/7/replays/set.mp4",
+          processing_status: "not_processed",
+          video_duration_seconds: null
+        })
+      ]
+    });
+    const available = renderContent({
+      replays: [
+        makeReplay({
+          source_type: "video",
+          upload_status: "uploaded",
+          storage_key: "users/1/matches/7/replays/set.mp4",
+          processing_status: "processed",
+          video_duration_seconds: 64
+        })
+      ]
+    });
+
+    expect(unavailable).not.toContain("Sample frame");
+    expect(available).toContain("Timestamp seconds");
+    expect(available).toContain("Sample frame");
+  });
+
+  it("checks whether a replay can sample frames", () => {
+    expect(canSampleFrame(makeReplay())).toBe(false);
+    expect(canSampleFrame(makeReplay({ upload_status: "uploaded", storage_key: "key", processing_status: "processed", video_duration_seconds: 64 }))).toBe(true);
+  });
+
+  it("validates frame sample timestamps before requesting a frame", () => {
+    expect(validateFrameTimestampInput("", 64)).toBe("Enter a timestamp in seconds.");
+    expect(validateFrameTimestampInput("nope", 64)).toBe("Timestamp must be a number greater than or equal to 0.");
+    expect(validateFrameTimestampInput("-1", 64)).toBe("Timestamp must be a number greater than or equal to 0.");
+    expect(validateFrameTimestampInput("10", null)).toBe("Inspect video metadata before sampling a frame.");
+    expect(validateFrameTimestampInput("64", 64)).toBe("Timestamp must be before the end of the video.");
+    expect(validateFrameTimestampInput("10", 64)).toBe("");
+  });
+
+  it("renders frame sampling errors and sampled images safely", () => {
+    const html = renderContent({
+      replays: [
+        makeReplay({
+          source_type: "video",
+          upload_status: "uploaded",
+          storage_key: "users/1/matches/7/replays/set.mp4",
+          processing_status: "processed",
+          video_duration_seconds: 64
+        })
+      ],
+      sampleErrors: { 1: "Unable to sample replay frame." },
+      sampleFrameUrls: { 1: "blob:sample-frame" }
+    });
+
+    expect(html).toContain("Unable to sample replay frame.");
+    expect(html).toContain("blob:sample-frame");
+    expect(html).toContain("Sampled frame from match-vs-sol.rep");
+    expect(html).not.toContain("[object Object]");
+  });
+
+  it("replaces sampled frame object URLs cleanly", () => {
+    const blob = new Blob(["jpeg"], { type: "image/jpeg" });
+    const createObjectURL = vi.fn().mockReturnValue("blob:new-frame");
+    const revokeObjectURL = vi.fn();
+
+    const updated = replaceSampleFrameUrl({
+      current: { 1: "blob:old-frame", 2: "blob:other-frame" },
+      replayId: 1,
+      blob,
+      createObjectURL,
+      revokeObjectURL
+    });
+
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:old-frame");
+    expect(createObjectURL).toHaveBeenCalledWith(blob);
+    expect(updated).toEqual({ 1: "blob:new-frame", 2: "blob:other-frame" });
   });
 
   it("runs successful initialization, direct PUT, and confirmation flow", async () => {

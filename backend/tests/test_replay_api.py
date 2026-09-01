@@ -4,8 +4,9 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.routes.replays import get_optional_storage_service, get_storage_service, get_video_inspection_service
+from app.api.routes.replays import get_frame_extraction_service, get_optional_storage_service, get_storage_service, get_video_inspection_service
 from app.main import app
+from app.services.frame_extraction import FrameExtractionError
 from app.services.storage import StorageObjectMetadata
 from app.services.video_inspection import VideoInspectionError, VideoMetadata
 
@@ -62,6 +63,20 @@ class FakeVideoInspectionService:
         return self.metadata
 
 
+class FakeFrameExtractionService:
+    def __init__(self, image_bytes: bytes = b"\xff\xd8\xff\xd9", error: FrameExtractionError | None = None) -> None:
+        self.image_bytes = image_bytes
+        self.error = error
+        self.calls: list[dict] = []
+
+    def extract_jpeg_frame(self, video_path: str, timestamp_seconds: float, output_path: str) -> None:
+        self.calls.append({"video_path": str(video_path), "timestamp_seconds": timestamp_seconds, "output_path": str(output_path)})
+        if self.error:
+            raise self.error
+        with open(output_path, "wb") as frame:
+            frame.write(self.image_bytes)
+
+
 @pytest.fixture(autouse=True)
 def clear_dependency_overrides():
     yield
@@ -77,6 +92,11 @@ def install_fake_storage(storage: FakeStorageService) -> FakeStorageService:
 def install_fake_inspector(inspector: FakeVideoInspectionService) -> FakeVideoInspectionService:
     app.dependency_overrides[get_video_inspection_service] = lambda: inspector
     return inspector
+
+
+def install_fake_frame_extractor(extractor: FakeFrameExtractionService) -> FakeFrameExtractionService:
+    app.dependency_overrides[get_frame_extraction_service] = lambda: extractor
+    return extractor
 
 
 def signup(prefix: str) -> str:
@@ -143,6 +163,17 @@ def init_upload(token: str, match_id: int, original_filename: str = "set.mp4", c
     return response.json()
 
 
+def create_processed_uploaded_replay(token: str, match_id: int, duration_seconds: float = 64.0) -> dict:
+    upload = init_upload(token, match_id)
+    replay = upload["replay"]
+    confirmed = client.post(f"/api/matches/{match_id}/replays/{replay['id']}/confirm-upload", headers=auth_headers(token))
+    assert confirmed.status_code == 200
+    install_fake_inspector(FakeVideoInspectionService(VideoMetadata(duration_seconds=duration_seconds, width=1920, height=1080, fps=59.94, codec="h264")))
+    inspected = client.post(f"/api/matches/{match_id}/replays/{replay['id']}/inspect", headers=auth_headers(token))
+    assert inspected.status_code == 200
+    return inspected.json()["replay"]
+
+
 def test_replay_endpoints_require_authentication():
     token = signup("replay_auth")
     match = create_match(token)
@@ -157,6 +188,7 @@ def test_replay_endpoints_require_authentication():
     assert client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/confirm-upload").status_code == 401
     assert client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/download-url").status_code == 401
     assert client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/inspect").status_code == 401
+    assert client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/frames/sample", json={"timestamp_seconds": 1}).status_code == 401
 
 
 def test_create_replay_on_owned_match_sets_match_id_and_trims_filename():
@@ -725,6 +757,174 @@ def test_storage_access_failure_during_inspection_is_safe():
     assert stored["processing_error"] == "Unable to access replay video for inspection."
     assert storage.download_file_calls[0]["storage_key"] == replay["storage_key"]
     assert inspector.inspect_calls == []
+
+
+def test_metadata_only_and_pending_replays_cannot_sample_frames():
+    install_fake_storage(FakeStorageService())
+    install_fake_frame_extractor(FakeFrameExtractionService())
+    token = signup("replay_sample_unavailable")
+    match = create_match(token)
+    metadata_only = create_replay(token, match["id"], source_type="video", original_filename="metadata-only.mp4")
+    pending = init_upload(token, match["id"], original_filename="pending.mp4")
+
+    metadata_response = client.post(
+        f"/api/matches/{match['id']}/replays/{metadata_only['id']}/frames/sample",
+        json={"timestamp_seconds": 1},
+        headers=auth_headers(token),
+    )
+    pending_response = client.post(
+        f"/api/matches/{match['id']}/replays/{pending['replay']['id']}/frames/sample",
+        json={"timestamp_seconds": 1},
+        headers=auth_headers(token),
+    )
+
+    assert metadata_response.status_code == 409
+    assert metadata_response.json()["detail"] == "Replay upload must be confirmed before frame sampling."
+    assert pending_response.status_code == 409
+
+
+def test_uploaded_replay_must_be_inspected_before_sampling_frames():
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    install_fake_frame_extractor(FakeFrameExtractionService())
+    token = signup("replay_sample_not_inspected")
+    match = create_match(token)
+    upload = init_upload(token, match["id"])
+    replay = upload["replay"]
+    confirmed = client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/confirm-upload", headers=auth_headers(token))
+    assert confirmed.status_code == 200
+
+    response = client.post(
+        f"/api/matches/{match['id']}/replays/{replay['id']}/frames/sample",
+        json={"timestamp_seconds": 1},
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Replay video metadata must be inspected before frame sampling."
+    assert storage.download_file_calls == []
+
+
+def test_processed_uploaded_replay_can_sample_frame_as_jpeg():
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    extractor = install_fake_frame_extractor(FakeFrameExtractionService(image_bytes=b"\xff\xd8sample\xff\xd9"))
+    token = signup("replay_sample_success")
+    match = create_match(token)
+    replay = create_processed_uploaded_replay(token, match["id"], duration_seconds=64.0)
+    storage.download_file_calls.clear()
+
+    response = client.post(
+        f"/api/matches/{match['id']}/replays/{replay['id']}/frames/sample",
+        json={"timestamp_seconds": 10.25},
+        headers=auth_headers(token),
+    )
+    stored = client.get(f"/api/matches/{match['id']}/replays/{replay['id']}", headers=auth_headers(token)).json()
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/jpeg"
+    assert response.content == b"\xff\xd8sample\xff\xd9"
+    assert storage.download_file_calls[0]["storage_key"] == replay["storage_key"]
+    assert extractor.calls[0]["timestamp_seconds"] == 10.25
+    assert stored["upload_status"] == "uploaded"
+    assert stored["processing_status"] == "processed"
+    assert stored["video_duration_seconds"] == 64.0
+
+
+def test_sample_frame_is_account_isolated():
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    extractor = install_fake_frame_extractor(FakeFrameExtractionService())
+    token_a = signup("replay_sample_owner_a")
+    token_b = signup("replay_sample_owner_b")
+    match_b = create_match(token_b)
+    replay_b = create_processed_uploaded_replay(token_b, match_b["id"], duration_seconds=64.0)
+    storage.download_file_calls.clear()
+
+    response = client.post(
+        f"/api/matches/{match_b['id']}/replays/{replay_b['id']}/frames/sample",
+        json={"timestamp_seconds": 5},
+        headers=auth_headers(token_a),
+    )
+
+    assert response.status_code == 404
+    assert storage.download_file_calls == []
+    assert extractor.calls == []
+
+
+def test_sample_frame_rejects_invalid_timestamps_before_downloading():
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    install_fake_frame_extractor(FakeFrameExtractionService())
+    token = signup("replay_sample_bad_timestamp")
+    match = create_match(token)
+    replay = create_processed_uploaded_replay(token, match["id"], duration_seconds=64.0)
+    storage.download_file_calls.clear()
+
+    negative = client.post(
+        f"/api/matches/{match['id']}/replays/{replay['id']}/frames/sample",
+        json={"timestamp_seconds": -1},
+        headers=auth_headers(token),
+    )
+    at_end = client.post(
+        f"/api/matches/{match['id']}/replays/{replay['id']}/frames/sample",
+        json={"timestamp_seconds": 64},
+        headers=auth_headers(token),
+    )
+    beyond_end = client.post(
+        f"/api/matches/{match['id']}/replays/{replay['id']}/frames/sample",
+        json={"timestamp_seconds": 65},
+        headers=auth_headers(token),
+    )
+
+    assert negative.status_code == 422
+    assert at_end.status_code == 422
+    assert at_end.json()["detail"] == "Timestamp must be before the end of the video."
+    assert beyond_end.status_code == 422
+    assert storage.download_file_calls == []
+
+
+def test_sample_frame_storage_failure_returns_safe_error_without_state_changes():
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    extractor = install_fake_frame_extractor(FakeFrameExtractionService())
+    token = signup("replay_sample_storage_fail")
+    match = create_match(token)
+    replay = create_processed_uploaded_replay(token, match["id"], duration_seconds=64.0)
+    storage.download_error = RuntimeError("R2 unavailable")
+    storage.download_file_calls.clear()
+
+    response = client.post(
+        f"/api/matches/{match['id']}/replays/{replay['id']}/frames/sample",
+        json={"timestamp_seconds": 10},
+        headers=auth_headers(token),
+    )
+    stored = client.get(f"/api/matches/{match['id']}/replays/{replay['id']}", headers=auth_headers(token)).json()
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "Unable to sample replay frame."
+    assert storage.download_file_calls[0]["storage_key"] == replay["storage_key"]
+    assert extractor.calls == []
+    assert stored["upload_status"] == "uploaded"
+    assert stored["processing_status"] == "processed"
+
+
+def test_sample_frame_extraction_failure_returns_safe_error_without_state_changes():
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    extractor = install_fake_frame_extractor(FakeFrameExtractionService(error=FrameExtractionError("Frame extraction timed out.")))
+    token = signup("replay_sample_extract_fail")
+    match = create_match(token)
+    replay = create_processed_uploaded_replay(token, match["id"], duration_seconds=64.0)
+    storage.download_file_calls.clear()
+
+    response = client.post(
+        f"/api/matches/{match['id']}/replays/{replay['id']}/frames/sample",
+        json={"timestamp_seconds": 10},
+        headers=auth_headers(token),
+    )
+    stored = client.get(f"/api/matches/{match['id']}/replays/{replay['id']}", headers=auth_headers(token)).json()
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Frame extraction timed out."
+    assert storage.download_file_calls[0]["storage_key"] == replay["storage_key"]
+    assert len(extractor.calls) == 1
+    assert stored["upload_status"] == "uploaded"
+    assert stored["processing_status"] == "processed"
 
 
 def test_owner_can_delete_replay_without_deleting_parent_match():
