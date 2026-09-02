@@ -15,6 +15,8 @@ from app.schemas.replay import (
     ReplayCreate,
     ReplayDownloadUrlResponse,
     ReplayFrameSampleRequest,
+    ReplayHudDetectionBatchRequest,
+    ReplayHudDetectionBatchResponse,
     ReplayHudDetectionResponse,
     ReplayRead,
     ReplayInspectResponse,
@@ -322,6 +324,52 @@ def detect_replay_frame_hud(
         evidence=detection.evidence,
         measurements=detection.measurements,
     )
+
+
+@router.post("/{replay_id}/hud-detections", response_model=ReplayHudDetectionBatchResponse)
+def detect_replay_frame_huds(
+    match_id: int,
+    replay_id: int,
+    payload: ReplayHudDetectionBatchRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    storage: S3CompatibleStorageService = Depends(get_storage_service),
+    extractor: FFmpegFrameExtractionService = Depends(get_frame_extraction_service),
+    detector: GGSTHudDetectionService = Depends(get_hud_detection_service),
+) -> ReplayHudDetectionBatchResponse:
+    get_owned_match(match_id, current_user, db)
+    replay = get_match_replay(match_id, replay_id, db)
+    validate_frame_sampling_replay(replay)
+    timestamps_seconds = [
+        validate_frame_timestamp(timestamp_seconds, replay.video_duration_seconds)
+        for timestamp_seconds in payload.timestamps_seconds
+    ]
+
+    samples: list[ReplayHudDetectionResponse] = []
+    try:
+        with TemporaryDirectory() as temporary_directory:
+            video_path = Path(temporary_directory) / "replay.mp4"
+            storage.download_object_to_file(replay.storage_key, video_path)
+            for index, timestamp_seconds in enumerate(timestamps_seconds):
+                frame_path = Path(temporary_directory) / f"frame-{index}.jpg"
+                extractor.extract_jpeg_frame(video_path, timestamp_seconds, frame_path)
+                detection = detector.detect(frame_path)
+                samples.append(
+                    ReplayHudDetectionResponse(
+                        timestamp_seconds=timestamp_seconds,
+                        classification=detection.classification,
+                        evidence=detection.evidence,
+                        measurements=detection.measurements,
+                    )
+                )
+    except FrameExtractionError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=error.public_message) from error
+    except GGSTHudDetectionError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=error.public_message) from error
+    except Exception as error:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unable to detect replay HUD.") from error
+
+    return ReplayHudDetectionBatchResponse(samples=samples)
 
 
 def extract_replay_frame(

@@ -75,21 +75,28 @@ class FakeVideoInspectionService:
 
 
 class FakeFrameExtractionService:
-    def __init__(self, image_bytes: bytes = b"\xff\xd8\xff\xd9", error: FrameExtractionError | None = None) -> None:
+    def __init__(self, image_bytes: bytes = b"\xff\xd8\xff\xd9", error: FrameExtractionError | None = None, error_on_call: int | None = None) -> None:
         self.image_bytes = image_bytes
         self.error = error
+        self.error_on_call = error_on_call
         self.calls: list[dict] = []
 
     def extract_jpeg_frame(self, video_path: str, timestamp_seconds: float, output_path: str) -> None:
         self.calls.append({"video_path": str(video_path), "timestamp_seconds": timestamp_seconds, "output_path": str(output_path)})
-        if self.error:
+        if self.error and (self.error_on_call is None or len(self.calls) == self.error_on_call):
             raise self.error
         with open(output_path, "wb") as frame:
             frame.write(self.image_bytes)
 
 
 class FakeHudDetectionService:
-    def __init__(self, result: GGSTHudDetectionResult | None = None, error: GGSTHudDetectionError | None = None) -> None:
+    def __init__(
+        self,
+        result: GGSTHudDetectionResult | None = None,
+        results: list[GGSTHudDetectionResult] | None = None,
+        error: GGSTHudDetectionError | None = None,
+        error_on_call: int | None = None,
+    ) -> None:
         self.result = result or GGSTHudDetectionResult(
             classification="likely_gameplay_hud",
             evidence={
@@ -106,14 +113,18 @@ class FakeHudDetectionService:
                 "top_right_horizontal_edge_score": 24.41,
             },
         )
+        self.results = results
         self.error = error
+        self.error_on_call = error_on_call
         self.calls: list[dict] = []
 
     def detect(self, image_path: str | Path) -> GGSTHudDetectionResult:
         path = str(image_path)
         self.calls.append({"image_path": path, "exists_during_detection": Path(path).exists()})
-        if self.error:
+        if self.error and (self.error_on_call is None or len(self.calls) == self.error_on_call):
             raise self.error
+        if self.results:
+            return self.results[len(self.calls) - 1]
         return self.result
 
 
@@ -142,6 +153,27 @@ def install_fake_frame_extractor(extractor: FakeFrameExtractionService) -> FakeF
 def install_fake_hud_detector(detector: FakeHudDetectionService) -> FakeHudDetectionService:
     app.dependency_overrides[get_hud_detection_service] = lambda: detector
     return detector
+
+
+def hud_result(classification: str, *, edge_score: float) -> GGSTHudDetectionResult:
+    return GGSTHudDetectionResult(
+        classification=classification,
+        evidence={
+            "top_left_hud": classification == "likely_gameplay_hud",
+            "top_right_hud": classification == "likely_gameplay_hud",
+            "top_center_support": classification == "likely_gameplay_hud",
+            "bottom_support": classification != "not_gameplay_hud",
+            "transition_hint": classification == "unknown",
+            "bilateral_top_hud": classification == "likely_gameplay_hud",
+            "blank_frame": False,
+        },
+        measurements={
+            "top_left_horizontal_edge_score": edge_score,
+            "top_center_horizontal_edge_score": edge_score + 1,
+            "top_right_horizontal_edge_score": edge_score + 2,
+            "top_center_stddev": edge_score + 3,
+        },
+    )
 
 
 def signup(prefix: str) -> str:
@@ -235,6 +267,7 @@ def test_replay_endpoints_require_authentication():
     assert client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/inspect").status_code == 401
     assert client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/frames/sample", json={"timestamp_seconds": 1}).status_code == 401
     assert client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/hud-detection", json={"timestamp_seconds": 1}).status_code == 401
+    assert client.post(f"/api/matches/{match['id']}/replays/{replay['id']}/hud-detections", json={"timestamps_seconds": [1]}).status_code == 401
 
 
 def test_create_replay_on_owned_match_sets_match_id_and_trims_filename():
@@ -1169,6 +1202,218 @@ def test_detect_replay_hud_maps_detector_failure_safely_and_cleans_up_temp_files
     assert Path(storage.download_file_calls[0]["destination"]).exists() is False
     assert stored["upload_status"] == "uploaded"
     assert stored["processing_status"] == "processed"
+
+
+def test_detect_replay_hud_batch_returns_ordered_samples_with_one_download():
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    extractor = install_fake_frame_extractor(FakeFrameExtractionService(image_bytes=b"\xff\xd8sample\xff\xd9"))
+    detector = install_fake_hud_detector(FakeHudDetectionService(results=[
+        hud_result("not_gameplay_hud", edge_score=2),
+        hud_result("unknown", edge_score=8),
+        hud_result("likely_gameplay_hud", edge_score=18),
+    ]))
+    token = signup("replay_hud_batch_success")
+    match = create_match(token)
+    replay = create_processed_uploaded_replay(token, match["id"], duration_seconds=64.0)
+    storage.download_file_calls.clear()
+
+    response = client.post(
+        f"/api/matches/{match['id']}/replays/{replay['id']}/hud-detections",
+        json={"timestamps_seconds": [15, 2, 54]},
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [sample["timestamp_seconds"] for sample in body["samples"]] == [15, 2, 54]
+    assert [sample["classification"] for sample in body["samples"]] == ["not_gameplay_hud", "unknown", "likely_gameplay_hud"]
+    assert body["samples"][2]["evidence"]["bilateral_top_hud"] is True
+    assert body["samples"][2]["measurements"]["top_left_horizontal_edge_score"] == 18
+    assert len(storage.download_file_calls) == 1
+    assert storage.download_file_calls[0]["storage_key"] == replay["storage_key"]
+    assert [call["timestamp_seconds"] for call in extractor.calls] == [15, 2, 54]
+    assert len(detector.calls) == 3
+    assert len({call["video_path"] for call in extractor.calls}) == 1
+    assert len({call["output_path"] for call in extractor.calls}) == 3
+    assert all(call["exists_during_detection"] for call in detector.calls)
+    assert Path(storage.download_file_calls[0]["destination"]).exists() is False
+    assert all(Path(call["image_path"]).exists() is False for call in detector.calls)
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_status"),
+    [
+        ({"timestamps_seconds": []}, 422),
+        ({"timestamps_seconds": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]}, 422),
+        ({"timestamps_seconds": [1, 1]}, 422),
+        ({"timestamps_seconds": [-1]}, 422),
+        ({"timestamps_seconds": [64]}, 422),
+        ({"timestamps_seconds": [65]}, 422),
+    ],
+)
+def test_detect_replay_hud_batch_rejects_invalid_timestamps_before_download(payload: dict, expected_status: int):
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    extractor = install_fake_frame_extractor(FakeFrameExtractionService())
+    detector = install_fake_hud_detector(FakeHudDetectionService())
+    token = signup("replay_hud_batch_invalid")
+    match = create_match(token)
+    replay = create_processed_uploaded_replay(token, match["id"], duration_seconds=64.0)
+    storage.download_file_calls.clear()
+    extractor.calls.clear()
+    detector.calls.clear()
+
+    response = client.post(
+        f"/api/matches/{match['id']}/replays/{replay['id']}/hud-detections",
+        json=payload,
+        headers=auth_headers(token),
+    )
+
+    assert response.status_code == expected_status
+    assert storage.download_file_calls == []
+    assert extractor.calls == []
+    assert detector.calls == []
+
+
+def test_detect_replay_hud_batch_is_account_isolated():
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    extractor = install_fake_frame_extractor(FakeFrameExtractionService())
+    detector = install_fake_hud_detector(FakeHudDetectionService())
+    token_a = signup("replay_hud_batch_owner_a")
+    token_b = signup("replay_hud_batch_owner_b")
+    match_b = create_match(token_b)
+    replay_b = create_processed_uploaded_replay(token_b, match_b["id"], duration_seconds=64.0)
+    storage.download_file_calls.clear()
+
+    response = client.post(
+        f"/api/matches/{match_b['id']}/replays/{replay_b['id']}/hud-detections",
+        json={"timestamps_seconds": [5, 10]},
+        headers=auth_headers(token_a),
+    )
+
+    assert response.status_code == 404
+    assert storage.download_file_calls == []
+    assert extractor.calls == []
+    assert detector.calls == []
+
+
+def test_detect_replay_hud_batch_reuses_replay_ready_validation():
+    install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    install_fake_frame_extractor(FakeFrameExtractionService())
+    install_fake_hud_detector(FakeHudDetectionService())
+    token = signup("replay_hud_batch_unavailable")
+    match = create_match(token)
+    metadata_only = create_replay(token, match["id"], source_type="video", original_filename="metadata-only.mp4")
+    pending = init_upload(token, match["id"], original_filename="pending.mp4")
+    upload = init_upload(token, match["id"], original_filename="not-inspected.mp4")
+    confirmed = client.post(f"/api/matches/{match['id']}/replays/{upload['replay']['id']}/confirm-upload", headers=auth_headers(token))
+    assert confirmed.status_code == 200
+
+    metadata_response = client.post(
+        f"/api/matches/{match['id']}/replays/{metadata_only['id']}/hud-detections",
+        json={"timestamps_seconds": [1]},
+        headers=auth_headers(token),
+    )
+    pending_response = client.post(
+        f"/api/matches/{match['id']}/replays/{pending['replay']['id']}/hud-detections",
+        json={"timestamps_seconds": [1]},
+        headers=auth_headers(token),
+    )
+    not_inspected_response = client.post(
+        f"/api/matches/{match['id']}/replays/{upload['replay']['id']}/hud-detections",
+        json={"timestamps_seconds": [1]},
+        headers=auth_headers(token),
+    )
+
+    assert metadata_response.status_code == 409
+    assert metadata_response.json()["detail"] == "Replay upload must be confirmed before frame sampling."
+    assert pending_response.status_code == 409
+    assert not_inspected_response.status_code == 409
+    assert not_inspected_response.json()["detail"] == "Replay video metadata must be inspected before frame sampling."
+
+
+def test_detect_replay_hud_batch_maps_frame_extraction_failure_safely_and_cleans_up():
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    extractor = install_fake_frame_extractor(FakeFrameExtractionService(error=FrameExtractionError("Frame extraction failed."), error_on_call=2))
+    detector = install_fake_hud_detector(FakeHudDetectionService())
+    token = signup("replay_hud_batch_extract_fail")
+    match = create_match(token)
+    replay = create_processed_uploaded_replay(token, match["id"], duration_seconds=64.0)
+    storage.download_file_calls.clear()
+
+    response = client.post(
+        f"/api/matches/{match['id']}/replays/{replay['id']}/hud-detections",
+        json={"timestamps_seconds": [10, 20, 30]},
+        headers=auth_headers(token),
+    )
+    stored = client.get(f"/api/matches/{match['id']}/replays/{replay['id']}", headers=auth_headers(token)).json()
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Frame extraction failed."
+    assert len(storage.download_file_calls) == 1
+    assert [call["timestamp_seconds"] for call in extractor.calls] == [10, 20]
+    assert len(detector.calls) == 1
+    assert Path(storage.download_file_calls[0]["destination"]).exists() is False
+    assert all(Path(call["image_path"]).exists() is False for call in detector.calls)
+    assert stored["upload_status"] == "uploaded"
+    assert stored["processing_status"] == "processed"
+
+
+def test_detect_replay_hud_batch_maps_detector_failure_safely_and_cleans_up():
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    extractor = install_fake_frame_extractor(FakeFrameExtractionService(image_bytes=b"\xff\xd8sample\xff\xd9"))
+    detector = install_fake_hud_detector(FakeHudDetectionService(error=GGSTHudDetectionError("HUD detection image could not be read."), error_on_call=2))
+    token = signup("replay_hud_batch_detector_fail")
+    match = create_match(token)
+    replay = create_processed_uploaded_replay(token, match["id"], duration_seconds=64.0)
+    storage.download_file_calls.clear()
+
+    response = client.post(
+        f"/api/matches/{match['id']}/replays/{replay['id']}/hud-detections",
+        json={"timestamps_seconds": [10, 20, 30]},
+        headers=auth_headers(token),
+    )
+    stored = client.get(f"/api/matches/{match['id']}/replays/{replay['id']}", headers=auth_headers(token)).json()
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "HUD detection image could not be read."
+    assert len(storage.download_file_calls) == 1
+    assert [call["timestamp_seconds"] for call in extractor.calls] == [10, 20]
+    assert len(detector.calls) == 2
+    assert Path(storage.download_file_calls[0]["destination"]).exists() is False
+    assert all(Path(call["image_path"]).exists() is False for call in detector.calls)
+    assert stored["upload_status"] == "uploaded"
+    assert stored["processing_status"] == "processed"
+
+
+def test_existing_single_timestamp_hud_and_raw_frame_endpoints_remain_unchanged():
+    storage = install_fake_storage(FakeStorageService(StorageObjectMetadata(content_length=1024, content_type="video/mp4", etag=None, metadata={})))
+    extractor = install_fake_frame_extractor(FakeFrameExtractionService(image_bytes=b"\xff\xd8sample\xff\xd9"))
+    detector = install_fake_hud_detector(FakeHudDetectionService(result=hud_result("likely_gameplay_hud", edge_score=18)))
+    token = signup("replay_hud_batch_existing")
+    match = create_match(token)
+    replay = create_processed_uploaded_replay(token, match["id"], duration_seconds=64.0)
+    storage.download_file_calls.clear()
+
+    hud_response = client.post(
+        f"/api/matches/{match['id']}/replays/{replay['id']}/hud-detection",
+        json={"timestamp_seconds": 15},
+        headers=auth_headers(token),
+    )
+    frame_response = client.post(
+        f"/api/matches/{match['id']}/replays/{replay['id']}/frames/sample",
+        json={"timestamp_seconds": 16},
+        headers=auth_headers(token),
+    )
+
+    assert hud_response.status_code == 200
+    assert hud_response.json()["timestamp_seconds"] == 15
+    assert hud_response.json()["classification"] == "likely_gameplay_hud"
+    assert frame_response.status_code == 200
+    assert frame_response.headers["content-type"] == "image/jpeg"
+    assert frame_response.content == b"\xff\xd8sample\xff\xd9"
+    assert len(storage.download_file_calls) == 2
+    assert [call["timestamp_seconds"] for call in extractor.calls] == [15, 16]
+    assert len(detector.calls) == 1
 
 
 def test_owner_can_delete_replay_without_deleting_parent_match():

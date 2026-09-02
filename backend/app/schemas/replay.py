@@ -1,3 +1,4 @@
+import math
 from datetime import datetime
 from typing import Literal
 
@@ -103,3 +104,23 @@ class ReplayHudDetectionResponse(BaseModel):
     classification: GGSTHudClassification
     evidence: dict[str, bool]
     measurements: dict[str, float]
+
+
+class ReplayHudDetectionBatchRequest(BaseModel):
+    timestamps_seconds: list[float] = Field(min_length=1, max_length=10)
+
+    @field_validator("timestamps_seconds")
+    @classmethod
+    def reject_duplicate_timestamps(cls, value: list[float]) -> list[float]:
+        for timestamp_seconds in value:
+            if not math.isfinite(timestamp_seconds) or timestamp_seconds < 0:
+                raise ValueError("Timestamps must be finite numbers greater than or equal to 0.")
+        if len(value) != len(set(value)):
+            raise ValueError("Duplicate timestamps are not allowed.")
+        return value
+
+    model_config = ConfigDict(allow_inf_nan=False, extra="forbid")
+
+
+class ReplayHudDetectionBatchResponse(BaseModel):
+    samples: list[ReplayHudDetectionResponse]
