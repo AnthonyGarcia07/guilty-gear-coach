@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 ReplaySourceType = Literal["replay_file", "video", "external_reference"]
 ReplayUploadStatus = Literal["metadata_only", "pending_upload", "uploaded"]
 ReplayProcessingStatus = Literal["not_processed", "processing", "processed", "failed"]
+GGSTHudClassification = Literal["likely_gameplay_hud", "not_gameplay_hud", "unknown"]
 
 
 def clean_optional_filename(value: str | None) -> str | None:
@@ -95,3 +96,10 @@ class ReplayFrameSampleRequest(BaseModel):
     timestamp_seconds: float = Field(ge=0)
 
     model_config = ConfigDict(allow_inf_nan=False, extra="forbid")
+
+
+class ReplayHudDetectionResponse(BaseModel):
+    timestamp_seconds: float
+    classification: GGSTHudClassification
+    evidence: dict[str, bool]
+    measurements: dict[str, float]

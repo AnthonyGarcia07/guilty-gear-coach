@@ -62,6 +62,8 @@ def test_strong_bilateral_top_hud_with_support_is_likely_gameplay_hud(tmp_path):
 
 def test_no_hud_structure_is_not_gameplay_hud(tmp_path):
     image = blank_image(color=30)
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((220, 140, 420, 240), fill=90)
 
     result = detect_saved(tmp_path, image)
 
@@ -70,6 +72,17 @@ def test_no_hud_structure_is_not_gameplay_hud(tmp_path):
     assert result.evidence["top_right_hud"] is False
     assert result.evidence["top_center_support"] is False
     assert result.evidence["bottom_support"] is False
+    assert result.evidence["blank_frame"] is False
+
+
+def test_blank_transition_frame_is_unknown(tmp_path):
+    image = blank_image(color=1)
+
+    result = detect_saved(tmp_path, image)
+
+    assert result.classification == "unknown"
+    assert result.evidence["blank_frame"] is True
+    assert result.evidence["bilateral_top_hud"] is False
 
 
 def test_transition_like_center_structure_without_bilateral_hud_is_unknown(tmp_path):
@@ -164,6 +177,7 @@ def test_result_includes_explicit_evidence_and_raw_measurements(tmp_path):
         "bottom_support",
         "transition_hint",
         "bilateral_top_hud",
+        "blank_frame",
     }
     assert result.measurements["image_width"] == 640
     assert result.measurements["image_height"] == 360

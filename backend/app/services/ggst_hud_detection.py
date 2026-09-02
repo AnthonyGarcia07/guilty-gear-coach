@@ -8,12 +8,14 @@ from PIL import Image, UnidentifiedImageError
 
 GGSTHudClassification = Literal["likely_gameplay_hud", "not_gameplay_hud", "unknown"]
 
-TOP_LEFT_HUD_EDGE_THRESHOLD = 14.0
-TOP_RIGHT_HUD_EDGE_THRESHOLD = 14.0
+TOP_LEFT_HUD_EDGE_THRESHOLD = 13.0
+TOP_RIGHT_HUD_EDGE_THRESHOLD = 13.0
 TOP_CENTER_SUPPORT_EDGE_THRESHOLD = 11.0
 BOTTOM_LEFT_SUPPORT_EDGE_THRESHOLD = 12.0
 BOTTOM_RIGHT_SUPPORT_EDGE_THRESHOLD = 9.0
 TOP_CENTER_TRANSITION_STDDEV_THRESHOLD = 50.0
+BLANK_FRAME_STDDEV_THRESHOLD = 1.0
+BLANK_REGION_EDGE_THRESHOLD = 1.0
 REGION_NORMALIZED_WIDTH = 160
 
 HUD_REGIONS: dict[str, tuple[float, float, float, float]] = {
@@ -121,9 +123,14 @@ def adjacent_intensity_difference(image: Image.Image, axis: Literal["x", "y"]) -
 
 
 def flatten_measurements(image: Image.Image, region_measurements: dict[str, dict[str, float]]) -> dict[str, float]:
+    grayscale_image = image.convert("L")
+    image_pixels = flattened_pixels(grayscale_image)
+    image_mean = sum(image_pixels) / len(image_pixels)
+    image_variance = sum((pixel - image_mean) ** 2 for pixel in image_pixels) / len(image_pixels)
     measurements = {
         "image_width": float(image.width),
         "image_height": float(image.height),
+        "image_stddev": round(math.sqrt(image_variance), 3),
     }
     for region_name, metrics in region_measurements.items():
         for metric_name, value in metrics.items():
@@ -140,6 +147,14 @@ def build_evidence(measurements: dict[str, float]) -> dict[str, bool]:
         or measurements["bottom_right_horizontal_edge_score"] >= BOTTOM_RIGHT_SUPPORT_EDGE_THRESHOLD
     )
     transition_hint = measurements["top_center_stddev"] >= TOP_CENTER_TRANSITION_STDDEV_THRESHOLD and not (top_left_hud and top_right_hud)
+    blank_frame = (
+        measurements["image_stddev"] < BLANK_FRAME_STDDEV_THRESHOLD
+        and measurements["top_left_horizontal_edge_score"] < BLANK_REGION_EDGE_THRESHOLD
+        and measurements["top_center_horizontal_edge_score"] < BLANK_REGION_EDGE_THRESHOLD
+        and measurements["top_right_horizontal_edge_score"] < BLANK_REGION_EDGE_THRESHOLD
+        and measurements["bottom_left_horizontal_edge_score"] < BLANK_REGION_EDGE_THRESHOLD
+        and measurements["bottom_right_horizontal_edge_score"] < BLANK_REGION_EDGE_THRESHOLD
+    )
 
     return {
         "top_left_hud": top_left_hud,
@@ -148,12 +163,15 @@ def build_evidence(measurements: dict[str, float]) -> dict[str, bool]:
         "bottom_support": bottom_support,
         "transition_hint": transition_hint,
         "bilateral_top_hud": top_left_hud and top_right_hud,
+        "blank_frame": blank_frame,
     }
 
 
 def classify_evidence(evidence: dict[str, bool]) -> GGSTHudClassification:
     if evidence["bilateral_top_hud"] and (evidence["top_center_support"] or evidence["bottom_support"]):
         return "likely_gameplay_hud"
+    if evidence["blank_frame"]:
+        return "unknown"
     if (
         not evidence["top_left_hud"]
         and not evidence["top_right_hud"]

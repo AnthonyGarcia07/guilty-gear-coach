@@ -15,6 +15,7 @@ from app.schemas.replay import (
     ReplayCreate,
     ReplayDownloadUrlResponse,
     ReplayFrameSampleRequest,
+    ReplayHudDetectionResponse,
     ReplayRead,
     ReplayInspectResponse,
     ReplayUpdate,
@@ -24,6 +25,7 @@ from app.schemas.replay import (
 )
 from app.services.storage import S3CompatibleStorageService, StorageConfigurationError
 from app.services.frame_extraction import FFmpegFrameExtractionService, FrameExtractionError
+from app.services.ggst_hud_detection import GGSTHudDetectionError, GGSTHudDetectionService
 from app.services.video_inspection import FFprobeVideoInspectionService, VideoInspectionError
 
 router = APIRouter(prefix="/matches/{match_id}/replays", tags=["replays"])
@@ -63,6 +65,10 @@ def get_video_inspection_service() -> FFprobeVideoInspectionService:
 
 def get_frame_extraction_service() -> FFmpegFrameExtractionService:
     return FFmpegFrameExtractionService()
+
+
+def get_hud_detection_service() -> GGSTHudDetectionService:
+    return GGSTHudDetectionService()
 
 
 def delete_storage_object_or_raise(storage_key: str | None, storage: S3CompatibleStorageService | None) -> None:
@@ -269,8 +275,7 @@ def sample_replay_frame(
         with TemporaryDirectory() as temporary_directory:
             video_path = Path(temporary_directory) / "replay.mp4"
             frame_path = Path(temporary_directory) / "frame.jpg"
-            storage.download_object_to_file(replay.storage_key, video_path)
-            extractor.extract_jpeg_frame(video_path, timestamp_seconds, frame_path)
+            extract_replay_frame(replay, timestamp_seconds, video_path, frame_path, storage, extractor)
             frame_bytes = frame_path.read_bytes()
     except FrameExtractionError as error:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=error.public_message) from error
@@ -280,6 +285,55 @@ def sample_replay_frame(
     if not frame_bytes:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Frame extraction did not produce an image.")
     return Response(content=frame_bytes, media_type="image/jpeg")
+
+
+@router.post("/{replay_id}/hud-detection", response_model=ReplayHudDetectionResponse)
+def detect_replay_frame_hud(
+    match_id: int,
+    replay_id: int,
+    payload: ReplayFrameSampleRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    storage: S3CompatibleStorageService = Depends(get_storage_service),
+    extractor: FFmpegFrameExtractionService = Depends(get_frame_extraction_service),
+    detector: GGSTHudDetectionService = Depends(get_hud_detection_service),
+) -> ReplayHudDetectionResponse:
+    get_owned_match(match_id, current_user, db)
+    replay = get_match_replay(match_id, replay_id, db)
+    validate_frame_sampling_replay(replay)
+    timestamp_seconds = validate_frame_timestamp(payload.timestamp_seconds, replay.video_duration_seconds)
+
+    try:
+        with TemporaryDirectory() as temporary_directory:
+            video_path = Path(temporary_directory) / "replay.mp4"
+            frame_path = Path(temporary_directory) / "frame.jpg"
+            extract_replay_frame(replay, timestamp_seconds, video_path, frame_path, storage, extractor)
+            detection = detector.detect(frame_path)
+    except FrameExtractionError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=error.public_message) from error
+    except GGSTHudDetectionError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=error.public_message) from error
+    except Exception as error:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unable to detect replay HUD.") from error
+
+    return ReplayHudDetectionResponse(
+        timestamp_seconds=timestamp_seconds,
+        classification=detection.classification,
+        evidence=detection.evidence,
+        measurements=detection.measurements,
+    )
+
+
+def extract_replay_frame(
+    replay: Replay,
+    timestamp_seconds: float,
+    video_path: Path,
+    frame_path: Path,
+    storage: S3CompatibleStorageService,
+    extractor: FFmpegFrameExtractionService,
+) -> None:
+    storage.download_object_to_file(replay.storage_key, video_path)
+    extractor.extract_jpeg_frame(video_path, timestamp_seconds, frame_path)
 
 
 def validate_frame_sampling_replay(replay: Replay) -> None:
