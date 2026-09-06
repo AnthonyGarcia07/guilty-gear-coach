@@ -69,6 +69,7 @@ describe("CoachingContent", () => {
     expect(html).toContain("Patterns");
     expect(html).toContain("Practice Priorities");
     expect(html).toContain("Recommended Focus");
+    expect(html).toContain("Structured insights from your logged match history. Replay analysis is not yet used for coaching.");
     expect(html).toContain("Work on missed anti-air");
     expect(html).toContain("Slayer: 10% → 60% (improving)");
   });

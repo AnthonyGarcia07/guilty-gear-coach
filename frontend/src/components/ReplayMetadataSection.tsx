@@ -529,7 +529,7 @@ export function ReplayMetadataContent({
           <span className="eyebrow">Replay metadata</span>
           <h2>Replay Sources</h2>
         </div>
-        <p className="muted">Attach metadata or upload an MP4 video. Videos are stored privately and are not analyzed yet.</p>
+        <p className="muted">Attach replay metadata or upload an MP4 video. Videos are stored privately and can be inspected for metadata and sampled frames.</p>
       </div>
 
       {error && <p className="form-error">{error}</p>}
@@ -600,7 +600,7 @@ export function ReplayMetadataContent({
         <h3>Upload MP4 replay video</h3>
         <label className="wide">MP4 file<input type="file" accept="video/mp4,.mp4" onChange={(event) => onFileChange(event.target.files?.[0] ?? null)} /></label>
         {selectedFile && <span className="field-hint wide">Selected: {selectedFile.name} · {formatFileSize(selectedFile.size)}</span>}
-        <span className="field-hint wide">The MP4 goes directly to private object storage. Guilty Gear Coach does not analyze video in this phase.</span>
+        <span className="field-hint wide">The MP4 goes directly to private object storage. After upload, you can inspect technical metadata and sample individual frames.</span>
         {uploadFieldError && <span className="field-error wide">{uploadFieldError}</span>}
         <button className="primary-button wide" type="button" disabled={uploading} onClick={onUpload}>{uploading ? "Uploading..." : "Upload MP4"}</button>
       </div>

@@ -3,15 +3,12 @@ import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import type { DashboardStats } from "../types";
 
-export function Dashboard() {
-  const [stats, setStats] = useState<DashboardStats | null>(null);
+function topLossReasonLabel(stats: DashboardStats) {
+  if (stats.most_common_reason_for_loss?.label) return stats.most_common_reason_for_loss.label;
+  return stats.losses === 0 ? "No losses logged" : "No loss reasons logged";
+}
 
-  useEffect(() => {
-    api.stats().then(setStats);
-  }, []);
-
-  if (!stats) return <div className="loading-panel">Loading dashboard...</div>;
-
+export function DashboardContent({ stats }: { stats: DashboardStats }) {
   return (
     <section className="page-stack">
       <div className="page-header">
@@ -25,7 +22,7 @@ export function Dashboard() {
         <article><span>Total matches</span><strong>{stats.total_matches}</strong></article>
         <article><span>Win rate</span><strong>{stats.win_rate}%</strong></article>
         <article><span>Wins / losses</span><strong>{stats.wins} / {stats.losses}</strong></article>
-        <article><span>Top loss reason</span><strong>{stats.most_common_reason_for_loss?.label ?? "No losses logged"}</strong></article>
+        <article><span>Top loss reason</span><strong>{topLossReasonLabel(stats)}</strong></article>
       </div>
       <div className="dashboard-grid">
         <section className="panel">
@@ -43,4 +40,16 @@ export function Dashboard() {
       </section>
     </section>
   );
+}
+
+export function Dashboard() {
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+
+  useEffect(() => {
+    api.stats().then(setStats);
+  }, []);
+
+  if (!stats) return <div className="loading-panel">Loading dashboard...</div>;
+
+  return <DashboardContent stats={stats} />;
 }

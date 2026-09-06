@@ -33,7 +33,7 @@ export function CoachingContent({ insights }: { insights: CoachingInsights }) {
         <div>
           <span className="eyebrow">Advanced deterministic coaching</span>
           <h1>Coaching</h1>
-          <p className="muted">Structured insights from your match history only. No AI, no replay parsing.</p>
+          <p className="muted">Structured insights from your logged match history. Replay analysis is not yet used for coaching.</p>
         </div>
       </div>
 

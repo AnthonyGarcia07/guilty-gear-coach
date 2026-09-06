@@ -90,7 +90,7 @@ describe("ReplayMetadataSection", () => {
 
     expect(html).toContain("Replay Sources");
     expect(html).toContain("No replay metadata attached to this set yet.");
-    expect(html).toContain("Attach metadata or upload an MP4 video.");
+    expect(html).toContain("Attach replay metadata or upload an MP4 video. Videos are stored privately and can be inspected for metadata and sampled frames.");
   });
 
   it("renders one replay with the correct source label", () => {
@@ -171,6 +171,7 @@ describe("ReplayMetadataSection", () => {
     expect(html).toContain("type=\"file\"");
     expect(html).toContain("accept=\"video/mp4,.mp4\"");
     expect(html).toContain("Upload MP4");
+    expect(html).toContain("The MP4 goes directly to private object storage. After upload, you can inspect technical metadata and sample individual frames.");
     expect(html).not.toContain("gameplay analysis is available");
     expect(html).not.toContain("Ready for analysis");
   });
