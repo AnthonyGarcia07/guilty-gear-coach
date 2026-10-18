@@ -1,87 +1,100 @@
 # Guilty Gear Coach
 
-Guilty Gear Coach is a full-stack match tracking and deterministic replay-analysis project for **Guilty Gear Strive** players. It started as a way to help my brother review his matches more efficiently, and it has grown into an engineering project focused on extracting objective facts from uploaded gameplay footage.
+Guilty Gear Coach is a full-stack match tracker and evidence-grounded replay-coaching project for **Guilty Gear Strive** players.
 
-The long-term direction is a deterministic **“Stockfish for Guilty Gear Strive”**:
+It began as a way to help my brother review matches more efficiently. Today, the application records completed sets, turns manual notes into deterministic coaching summaries, stores private replay videos, and provides the first computer-vision building blocks for analyzing those videos.
+
+The long-term goal is a **Stockfish-like post-match review experience**: help a player find important moments, understand possible decisions, and choose what to practice next. The comparison describes the review experience—not a claim that fighting games have a single computable best move.
+
+## Product Vision
+
+Replay understanding will use two complementary analysis paths:
 
 ```text
-uploaded gameplay -> deterministic replay analysis -> objective gameplay facts -> deterministic coaching/insights
+                             -> CV measurements and observations
+uploaded gameplay video ----> deterministic events, findings, and review moments
+                         |
+                         +---> multimodal LLM video interpretation
+                               -> AI-generated gameplay hypotheses and coaching ideas
+
+both paths -> evidence-linked player review and practice recommendations
 ```
 
-The project is not a finished Stockfish equivalent, replay parser, AI gameplay analyzer, OCR system, or machine-learning model. Today, it combines a useful manual match tracker with early replay-analysis primitives: private MP4 storage, video metadata inspection, frame extraction, deterministic HUD detection, timestamp-sampled HUD timelines, and coarse gameplay-window inference.
+Computer vision provides measurable, repeatable evidence. A multimodal LLM may directly inspect authorized clips or sampled frames and suggest possible decisions, missed opportunities, alternatives, explanations, or practice priorities.
 
-## Current Highlights
+Generated interpretations may be useful even when uncertain, but they must remain visibly labelled as **AI coaching hypotheses** unless independently validated. They never become measured gameplay facts merely because a model stated them confidently.
 
-- Full-stack React/TypeScript + FastAPI application with PostgreSQL persistence.
-- JWT authentication with user-owned matches, replays, and coaching data.
-- Manual match tracking for characters, matchup, rank, score, notes, mistake tags, strengths, loss reasons, and practice focus.
-- Deterministic coaching insights from match history, including trends, streaks, matchup summaries, repeated mistakes, and practice priorities.
-- Private MP4 replay storage using Cloudflare R2 through S3-compatible presigned upload/download URLs.
-- Backend upload verification, authorized download, and object cleanup when replay metadata or parent matches are deleted.
-- `ffprobe` metadata inspection and FFmpeg frame extraction from private uploaded videos.
-- Pillow-based deterministic GGST combat-HUD detection from extracted image pixels.
-- Timestamp-sampled HUD timelines and coarse gameplay-window inference with uncertainty ranges.
+> **Current status:** The match tracker and early deterministic replay-analysis foundation are implemented. Replay-derived coaching and multimodal LLM integration are planned, not currently available.
 
-## Demo / Screenshots
+## Screenshots
 
 ### Dashboard
 
-Populated match tracking dashboard with win rate, opponent performance, mistake tags, and recent match history.
+Match statistics, opponent performance, mistake tags, and recent match history.
 
 ![Guilty Gear Coach dashboard](docs/images/dashboard.png)
 
 ### Coaching Insights
 
-Deterministic coaching recommendations generated from logged match history only.
+Deterministic coaching recommendations generated from logged match history.
 
 ![Guilty Gear Coach coaching insights](docs/images/coaching.png)
 
 ### Replay Processing
 
-Private uploaded replay video with inspected technical metadata, explicit timestamp input, and an extracted gameplay frame.
+A private uploaded replay with inspected metadata, explicit timestamp sampling, and an extracted gameplay frame.
 
 ![Guilty Gear Coach replay processing](docs/images/replay-processing.png)
 
-## What The App Does Today
+## Implemented Today
 
-### Match Tracking
+### Match tracking and coaching
 
-- Register, log in, and manage account-scoped match history.
-- Create, edit, delete, and review completed Guilty Gear Strive sets.
-- Track player character, opponent character, result, rank, date, duration, score context, notes, mistakes, strengths, reason for loss, and next practice focus.
-- View dashboard statistics such as win rate, recent matches, matchup performance, mistake frequency, and loss reasons.
+- Email/password signup and login with JWT authentication.
+- Account-scoped match creation, editing, deletion, pagination, and sorting.
+- Characters, result, rank, date, duration, completed-set score, notes, mistakes, strengths, loss reason, and practice focus.
+- Dashboard statistics and deterministic coaching summaries from manually entered match history.
+- Evidence and sample sizes for coaching conclusions, including honest insufficient-data states.
 
-### Deterministic Coaching
+### Private replay lifecycle
 
-- Computes evidence-backed insights from manually entered match data only.
-- Reports recent performance, win/loss streaks, most played character, strong and weak matchups, repeated mistakes, and recurring practice priorities.
-- Produces structured recommendations with priorities, sample sizes, and supporting evidence.
-- Avoids claiming strong conclusions when there is not enough match history.
+- Multiple replay records per match.
+- Metadata-only replay references or real MP4 uploads.
+- Direct browser-to-Cloudflare-R2 uploads through short-lived presigned URLs.
+- Backend confirmation using trusted object metadata.
+- Authorized short-lived download URLs.
+- R2 object cleanup when uploaded replays or parent matches are deleted.
+- Ownership enforced through `Replay -> Match -> User`.
 
-### Replay Foundation
+### Replay-analysis foundation
 
-- Attach one or more replay records to a match.
-- Store metadata-only replay sources or upload real MP4 gameplay videos.
-- Upload MP4 bytes directly from the browser to private R2 object storage using a backend-issued presigned `PUT` URL.
-- Confirm uploads by checking trusted object metadata through the backend before marking a replay uploaded.
-- Generate short-lived authorized download URLs for uploaded videos.
-- Delete R2 objects when an uploaded replay or its parent match is deleted.
+- `ffprobe` metadata inspection for duration, resolution, frame rate, and codec.
+- FFmpeg frame extraction at explicit timestamps.
+- Pillow-based deterministic combat-HUD measurements.
+- Single- and multi-timestamp HUD detection.
+- Internal timestamp generation and HUD timeline scanning.
+- Internal coarse gameplay-window inference with uncertainty ranges.
 
-### Replay Analysis Foundation
+## Not Yet Implemented
 
-- Inspect uploaded MP4s with `ffprobe` for technical metadata such as duration, resolution, frame rate, and codec.
-- Extract a single resized JPEG frame at an explicit timestamp using FFmpeg.
-- Return sampled frames to the frontend for display without permanently storing frames.
-- Classify extracted frames with deterministic Pillow-based HUD measurements:
-  - `likely_gameplay_hud`
-  - `not_gameplay_hud`
-  - `unknown`
-- Analyze multiple explicit timestamps from one replay while downloading the replay only once.
-- Internally generate timestamp-sampled HUD timelines and infer coarse gameplay-window boundaries.
+- Refined gameplay-window boundaries or durable analysis runs.
+- User-visible gameplay-window results.
+- Game or round segmentation.
+- Health, Burst, Tension, timer, character, position, movement, animation, or move recognition.
+- Replay-derived gameplay events, findings, or coaching.
+- A background analysis worker.
+- A multimodal provider or AI gameplay hypotheses.
+- Cross-replay personalization.
 
-## Replay Analysis Pipeline
+The first targeted replay-derived coaching finding is:
 
-The current replay pipeline is intentionally deterministic and evidence-first:
+> **The round appears to have ended while Burst was visually available.**
+
+This will be presented as an evidence-linked review moment, not automatically as a mistake. The player may have had a valid reason not to Burst, and either the visual evidence or tactical context may be incomplete.
+
+## Current Replay Pipeline
+
+The implemented video path is deterministic and evidence-first:
 
 ```text
 private replay object
@@ -94,188 +107,87 @@ private replay object
   -> coarse gameplay-window inference
 ```
 
-The HUD detector looks for standard Guilty Gear Strive combat HUD structure in sampled frames. It does not read the timer, identify characters, detect moves, inspect health values, or understand gameplay decisions yet.
+The current detector classifies sampled frames as:
 
-Visual ambiguity and technical failures are kept separate:
+- `likely_gameplay_hud`;
+- `not_gameplay_hud`; or
+- `unknown`.
 
-- `unknown` means the frame was processed successfully but the visual evidence was ambiguous.
-- A failed sample means extraction or detection failed technically.
+`unknown` means processing succeeded but the visual evidence was inconclusive. It is different from `failed`, which means extraction or detection failed technically.
 
-The gameplay-window inference also avoids fake precision. For example, a manually verified replay produced coarse boundaries approximately like:
-
-```text
-start boundary: [12s, 14s]
-end boundary:   [58s, 60s]
-```
-
-Those are uncertainty ranges from sampled evidence, not exact transition timestamps. Boundary refinement is planned next but is not implemented yet.
+Sampled transitions are stored as ranges rather than false frame-level precision. A boundary may look like `[12s, 14s]`, meaning the transition was observed somewhere inside that interval.
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-    Player[Player] --> Frontend[React + TypeScript frontend]
+    Player[Player] --> Frontend[React + TypeScript]
     Frontend --> API[FastAPI REST API]
     API --> Postgres[(PostgreSQL)]
     API --> StorageAuth[Presigned upload/download authorization]
     StorageAuth --> R2[(Private Cloudflare R2 bucket)]
 
-    API --> LocalProcessing[Temporary local replay processing]
-    R2 --> LocalProcessing
-    LocalProcessing --> FFprobe[ffprobe metadata inspection]
-    LocalProcessing --> FFmpeg[FFmpeg frame extraction]
-    FFmpeg --> HUD[Pillow HUD detector]
-    HUD --> Timeline[Timestamp-sampled HUD timeline]
-    Timeline --> Windows[Coarse gameplay-window inference]
+    R2 --> Processing[Temporary local replay processing]
+    Processing --> FFprobe[ffprobe inspection]
+    Processing --> FFmpeg[FFmpeg frame extraction]
+    FFmpeg --> HUD[Pillow HUD detection]
+    HUD --> Timeline[Sampled HUD timeline]
+    Timeline --> Windows[Coarse gameplay windows]
 
-    Postgres --> Coaching[Deterministic coaching insights]
-    API --> Coaching
-    API --> Frontend
+    Postgres --> ManualCoaching[Manual-data coaching]
+    ManualCoaching --> Frontend
+
+    Windows -. planned .-> Rules[Versioned events and deterministic findings]
+    Processing -. planned bounded media .-> LLM[Multimodal gameplay interpretation]
+    Rules -. planned .-> Review[Evidence-linked review]
+    LLM -. planned AI hypotheses .-> Review
 ```
 
-Replay ownership is enforced through:
+FastAPI is the authorization and control plane. The browser never receives storage credentials, permanent public object URLs, raw server paths, or model-provider credentials.
 
-```text
-Replay -> Match -> User
-```
+PostgreSQL rows and R2 objects are separate resources, so upload, confirmation, and deletion flows account for partial failure. Replay processing uses temporary local workspaces, subprocess timeouts, cleanup, and safe public error messages.
 
-The frontend never receives storage credentials, permanent public object URLs, or raw filesystem paths. FastAPI remains the authorization/control plane, while MP4 bytes go directly between the browser and private object storage.
+## Technology
 
-## Tech Stack
+| Area | Technologies |
+| --- | --- |
+| Frontend | React, TypeScript, Vite, React Router, Vitest |
+| Backend | Python 3.12, FastAPI, Pydantic, SQLAlchemy, Alembic, pytest |
+| Data | PostgreSQL |
+| Replay storage | Private Cloudflare R2 through the S3-compatible API and `boto3` |
+| Media processing | FFmpeg, `ffprobe`, Pillow |
+| Authentication | JWT bearer tokens, `python-jose`, Passlib/bcrypt |
+| Containers | Docker Compose, PostgreSQL, FastAPI, Nginx |
 
-### Backend
+## Quick Start with Docker
 
-- Python 3.12
-- FastAPI
-- SQLAlchemy
-- Alembic
-- PostgreSQL
-- Pydantic settings
-- JWT authentication with `python-jose`
-- Password hashing with `passlib` / bcrypt
-- `boto3` for S3-compatible Cloudflare R2 access
-- FFmpeg / `ffprobe`
-- Pillow
-- pytest
+### Requirements
 
-### Frontend
+- Docker with Docker Compose
+- Git
+- Cloudflare R2 credentials only if you want to exercise real replay upload, download, or processing
 
-- React
-- TypeScript
-- Vite
-- React Router
-- Vitest
-- Nginx for the Docker production-style frontend container
+Clone the repository, then create the environment file.
 
-### Infrastructure
-
-- Docker Compose
-- PostgreSQL container
-- FastAPI backend container
-- Static frontend container
-- Private Cloudflare R2 bucket through the S3-compatible API
-
-## Key Engineering Features
-
-- **Private replay storage lifecycle:** browser-to-R2 direct upload, backend confirmation, authorized download, and cleanup on destructive deletes.
-- **Ownership enforcement:** every match, replay, upload, download, inspection, and deletion path is scoped through the authenticated user.
-- **Deterministic video processing:** `ffprobe` extracts trusted technical metadata and FFmpeg extracts sampled frames without loading entire MP4s into Python memory.
-- **Image-based HUD detection:** Pillow-based measurements classify whether a sampled frame contains the standard GGST combat HUD.
-- **Timestamp-sampled analysis:** batch HUD detection and internal timeline scanning analyze repeated timestamps from one downloaded replay.
-- **Uncertainty-aware segmentation:** gameplay windows are represented as coarse boundary ranges instead of pretending sampled observations prove exact frame-level transitions.
-- **Testable architecture:** storage, frame extraction, HUD detection, timeline scanning, and gameplay-window inference are separated into focused backend services.
-
-## API Overview
-
-FastAPI serves interactive API documentation at:
-
-```text
-http://localhost:8000/docs
-```
-
-Important route groups:
-
-### Authentication and Users
-
-- `POST /api/auth/signup`
-- `POST /api/auth/login`
-- `GET /api/users/me`
-
-### Matches and Stats
-
-- `GET /api/matches`
-- `POST /api/matches`
-- `GET /api/matches/{match_id}`
-- `PATCH /api/matches/{match_id}`
-- `DELETE /api/matches/{match_id}`
-- `GET /api/stats/dashboard`
-- `GET /api/coaching/insights`
-
-### Replay Metadata
-
-- `GET /api/matches/{match_id}/replays`
-- `POST /api/matches/{match_id}/replays`
-- `GET /api/matches/{match_id}/replays/{replay_id}`
-- `PATCH /api/matches/{match_id}/replays/{replay_id}`
-- `DELETE /api/matches/{match_id}/replays/{replay_id}`
-
-### Replay Storage
-
-- `POST /api/matches/{match_id}/replays/uploads`
-- `POST /api/matches/{match_id}/replays/{replay_id}/confirm-upload`
-- `POST /api/matches/{match_id}/replays/{replay_id}/download-url`
-
-### Replay Processing and HUD Detection
-
-- `POST /api/matches/{match_id}/replays/{replay_id}/inspect`
-- `POST /api/matches/{match_id}/replays/{replay_id}/frames/sample`
-- `POST /api/matches/{match_id}/replays/{replay_id}/hud-detection`
-- `POST /api/matches/{match_id}/replays/{replay_id}/hud-detections`
-
-Internal services such as timestamp generation, HUD timeline scanning, and gameplay-window inference are backend primitives and are not currently exposed as public API routes.
-
-## Project Structure
-
-```text
-guilty-gear-coach/
-  backend/
-    alembic/            Database migrations
-    app/
-      api/routes/       FastAPI route modules
-      core/             Settings, database, auth, storage config
-      models/           SQLAlchemy models
-      schemas/          Pydantic request/response schemas
-      services/         Coaching, storage, video, HUD, and timeline logic
-    scripts/            Local calibration/development utilities
-    tests/              pytest backend tests
-  frontend/
-    src/
-      api/              Typed API client
-      auth/             Authentication context
-      components/       Shared UI and replay components
-      pages/            Route pages
-      test/             Frontend test setup
-```
-
-## Running Locally
-
-### Docker
-
-1. Copy the example environment file:
+Bash:
 
 ```bash
 cp .env.example .env
 ```
 
-2. Fill in secrets and storage settings as needed. The app can run basic match tracking without real R2 credentials, but MP4 upload/download/inspection requires valid private R2 configuration.
+PowerShell:
 
-3. Start the stack:
+```powershell
+Copy-Item .env.example .env
+```
+
+Replace the placeholder `SECRET_KEY`. Configure the R2 values when real replay storage is needed, then start the application:
 
 ```bash
 docker compose up --build
 ```
 
-4. Open:
+Open:
 
 ```text
 Frontend: http://localhost:8080
@@ -283,22 +195,76 @@ API docs: http://localhost:8000/docs
 Health:   http://localhost:8000/health
 ```
 
-The backend container runs `alembic upgrade head` on startup. The Docker setup uses production-style images, so source-code changes usually require rebuilding and recreating the affected container.
+The backend container waits for PostgreSQL, runs `alembic upgrade head`, and then starts FastAPI. The containers use production-style images, so source changes usually require rebuilding the affected service.
 
-### Backend Development
+## Cloudflare R2
+
+Basic match tracking does not require working R2 credentials. Real MP4 upload, download, inspection, and frame extraction do.
+
+Use a private bucket and configure the `S3_*` values documented in [`.env.example`](.env.example). The credentials need object read, write, head, and delete access for that bucket.
+
+For browser uploads, configure bucket CORS for the exact frontend origin:
+
+- allow `PUT` and `GET`;
+- allow the `Content-Type` request header;
+- expose `ETag`; and
+- do not make the bucket public.
+
+Keep real credentials only in an uncommitted `.env` file or deployment secret manager.
+
+## Local Development
+
+Docker Compose is the simplest way to run the complete stack. For separate development servers, start PostgreSQL first:
+
+```bash
+docker compose up -d db
+```
+
+### Backend
+
+Create and activate a virtual environment, then install the pinned dependencies.
+
+For Bash:
 
 ```bash
 cd backend
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+For PowerShell:
+
+```powershell
+cd backend
+python -m venv .venv
+. ./.venv/Scripts/Activate.ps1
+pip install -r requirements.txt
+```
+
+When running the backend outside Docker, point `DATABASE_URL` at `localhost` rather than the Compose hostname `db`. Also set a development `SECRET_KEY`.
+
+Bash:
+
+```bash
+export DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/guilty_gear_coach
+export SECRET_KEY=replace-with-a-long-random-value
 alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
-Local replay metadata inspection and frame extraction require `ffprobe` and FFmpeg to be available on the backend `PATH`. The Docker backend image installs these tools.
+PowerShell:
 
-### Frontend Development
+```powershell
+$env:DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost:5432/guilty_gear_coach"
+$env:SECRET_KEY = "replace-with-a-long-random-value"
+alembic upgrade head
+uvicorn app.main:app --reload
+```
+
+Local replay inspection and frame extraction also require FFmpeg and `ffprobe` on the backend `PATH`. The Docker backend image already installs them.
+
+### Frontend
 
 ```bash
 cd frontend
@@ -306,65 +272,24 @@ npm install
 npm run dev
 ```
 
-Set `VITE_API_URL=http://localhost:8000/api` if the frontend dev server is not using the Docker/Nginx `/api` proxy.
-
-## Cloudflare R2 Configuration
-
-Real credentials should live only in `.env` or a deployment secret manager. Do not commit them.
-
-Required storage variables:
-
-```text
-S3_ENDPOINT_URL=https://<account-id>.r2.cloudflarestorage.com
-S3_BUCKET_NAME=guilty-gear-coach-replays
-S3_REGION=auto
-S3_ACCESS_KEY_ID=<r2-access-key-id>
-S3_SECRET_ACCESS_KEY=<r2-secret-access-key>
-S3_PRESIGNED_UPLOAD_EXPIRATION_SECONDS=900
-S3_PRESIGNED_DOWNLOAD_EXPIRATION_SECONDS=300
-MAX_MP4_UPLOAD_SIZE_BYTES=2147483648
-```
-
-Minimum R2 setup:
-
-1. Create a private R2 bucket.
-2. Create R2 API credentials with object read/write/head/delete access for that bucket.
-3. Use the account-level S3-compatible endpoint.
-4. Keep `S3_REGION=auto` for R2 unless your provider requires something else.
-5. Configure bucket CORS for the frontend origins that will use presigned URLs.
-
-Local CORS example:
-
-```json
-[
-  {
-    "AllowedOrigins": ["http://localhost:8080", "http://localhost:5173"],
-    "AllowedMethods": ["PUT", "GET"],
-    "AllowedHeaders": ["Content-Type"],
-    "ExposeHeaders": ["ETag"],
-    "MaxAgeSeconds": 3600
-  }
-]
-```
-
-For production, replace the localhost origins with the exact deployed frontend origin. Keep the bucket private; do not enable public replay access.
+Open `http://localhost:5173`. Set `VITE_API_URL=http://localhost:8000/api` when the Vite development server is not using the Docker/Nginx `/api` proxy.
 
 ## Testing
 
-Backend tests:
+Backend:
 
 ```bash
 cd backend
 pytest
 ```
 
-Backend tests through the Docker backend container:
+Backend through the running Docker container:
 
 ```bash
 docker compose exec backend sh -lc "PYTHONPATH=/app pytest"
 ```
 
-Frontend tests and production build:
+Frontend:
 
 ```bash
 cd frontend
@@ -372,69 +297,41 @@ npm test
 npm run build
 ```
 
-The automated tests cover authentication, account isolation, match CRUD and validation, dashboard/coaching calculations, replay metadata, private storage behavior with mocked S3/R2 calls, upload confirmation, deletion cleanup, video metadata inspection, frame extraction, HUD detection, HUD timeline scanning, gameplay-window inference, and frontend match/replay workflows.
+The suites cover authentication, account isolation, match workflows, coaching calculations, replay metadata, mocked private-storage behavior, upload confirmation, deletion cleanup, video inspection, frame extraction, HUD detection, timeline scanning, gameplay-window inference, and frontend match/replay interactions.
 
-Automated tests do not require real Cloudflare credentials, real R2 network access, or large replay fixtures.
+The current automated tests do not require real R2 access or large replay fixtures. Any future database-mutating integration suite must use an isolated disposable database rather than development or production data.
 
-## Current Development Status
+## Roadmap
 
-### Implemented
+The repository follows a ten-stage roadmap. The current position is:
 
-- Full-stack authenticated match tracker.
-- User-owned match, dashboard, coaching, and replay workflows.
-- Private MP4 replay upload/download through Cloudflare R2 presigned URLs.
-- Upload confirmation and R2 object cleanup.
-- Technical video metadata inspection.
-- Single-frame extraction and frontend display.
-- Deterministic single-frame and multi-timestamp HUD detection.
-- Internal timestamp-sampled HUD timeline scanning.
-- Internal coarse gameplay-window inference with uncertainty ranges.
+| Stage | Status | Outcome |
+| ---: | --- | --- |
+| 1 | Implemented baseline | Match tracking, private replay storage, media inspection, HUD detection, timelines, and coarse gameplay windows |
+| 2 | Next | Boundary refinement and a versioned evaluation harness |
+| 3 | Planned | Durable analysis runs, a recoverable worker, and user-visible evidence |
+| 4 | Planned | Game and round segmentation |
+| 5 | Planned | An early privacy-gated multimodal gameplay-understanding prototype |
+| 6 | Planned | The first round-end Burst review moment |
+| 7–10 | Planned | Broader observations, gameplay events, move/punish analysis, personalization, and production hardening |
 
-### In Development / Next
+Stage 1 is complete and no active implementation is recorded. **Stage 2 — Boundary Refinement and Evaluation Harness** is next. Stage 5 may overlap Stage 4 only after Stage 3 establishes durable runs, bounded derived media, privacy controls, and a backend-only provider boundary.
 
-- Phase 4.5B-4: refine coarse gameplay boundary ranges by sampling more densely near transitions.
+See [`context/build-plan.md`](context/build-plan.md) for milestone dependencies and acceptance criteria, and [`context/progress-tracker.md`](context/progress-tracker.md) for current status.
 
-### Longer-Term Direction
+## Project Principles
 
-- More robust gameplay segment discovery.
-- Round and game boundary detection.
-- HUD-region extraction for timer, health, Burst, and Tension signals.
-- Deterministic gameplay events and analysis findings.
-- Coaching recommendations grounded in extracted replay facts.
-- Optional natural-language explanations after deterministic evidence exists.
+- **Evidence and hypotheses remain distinct.** Measured observations and deterministic findings are not interchangeable with generated interpretations.
+- **Uncertainty is explicit.** Ambiguous visual evidence stays `unknown`; technical failure stays `failed`.
+- **Private by default.** Replays remain account-scoped in private object storage.
+- **Simple before sophisticated.** New layers and dependencies need a demonstrated benefit.
+- **Understandable code matters.** This is both a product and a learning project, so direct data flow and clear responsibilities are preferred over unnecessary abstraction.
 
-## Product Vision
+## More Documentation
 
-The long-term analysis hierarchy is expected to evolve toward:
-
-```text
-Replay
-  -> Set / Match
-  -> Game
-  -> Round
-  -> Gameplay Event
-  -> Deterministic Analysis Finding
-  -> Coaching Recommendation
-  -> Optional LLM Explanation
-```
-
-Terminology:
-
-- A round is one health-bar battle.
-- A game is won by taking two rounds.
-- A set contains multiple games.
-- Standard online and tournament formats may use different numbers of games required to win a set.
-
-Future replay analysis may eventually identify neutral losses, missed anti-airs, failed punish opportunities, unsafe attacks, Burst mistakes, Tension usage, defensive habits, repeated mistakes, wall-break decisions, game-level turning points, and round-level turning points.
-
-The important design constraint is that replay facts should come from deterministic analysis. A future language model may explain findings in plain English, but it should not invent the underlying gameplay evidence.
-
-## What This Project Is Not Yet
-
-- Not a native Guilty Gear Strive replay parser.
-- Not a complete video understanding system.
-- Not OCR, machine learning, or computer vision model training.
-- Not a deployed production service.
-- Not a replacement for human match review yet.
-
-The current implementation is the foundation for those later capabilities: secure replay ingestion, deterministic frame inspection, timestamp-sampled evidence, and coarse gameplay segmentation.
+- [Project overview](context/project-overview.md)
+- [Architecture](context/architecture.md)
+- [Code standards](context/code-standards.md)
+- [Library guidance](context/library-docs.md)
+- [Build plan](context/build-plan.md)
+- [Progress tracker](context/progress-tracker.md)

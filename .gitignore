@@ -8,3 +8,4 @@ dist/
 *.pyc
 postgres_data/
 dev-fixtures/
+memory.md
