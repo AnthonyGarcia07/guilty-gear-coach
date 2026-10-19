@@ -13,10 +13,18 @@ class FrameExtractionError(RuntimeError):
 
 
 class FFmpegFrameExtractionService:
+    """Extract bounded JPEG evidence from a local replay with FFmpeg.
+
+    Callers choose the timestamp and output path. This adapter owns subprocess
+    safety, output sizing, and verification that FFmpeg actually wrote an image.
+    """
+
     def __init__(self, ffmpeg_path: str = "ffmpeg") -> None:
         self.ffmpeg_path = ffmpeg_path
 
     def extract_jpeg_frame(self, video_path: str | Path, timestamp_seconds: float, output_path: str | Path) -> None:
+        """Write one JPEG frame or raise a deliberately safe public error."""
+
         timestamp = validate_timestamp(timestamp_seconds)
         try:
             subprocess.run(
@@ -31,6 +39,7 @@ class FFmpegFrameExtractionService:
                     "-frames:v",
                     "1",
                     "-vf",
+                    # Limit processing cost while preserving the source aspect ratio.
                     f"scale='min({FRAME_EXTRACTION_WIDTH},iw)':-2",
                     "-q:v",
                     "3",
@@ -49,6 +58,7 @@ class FFmpegFrameExtractionService:
         except subprocess.CalledProcessError as error:
             raise FrameExtractionError("Frame extraction failed.") from error
 
+        # A successful process exit is insufficient if FFmpeg produced no evidence.
         output = Path(output_path)
         if not output.exists() or output.stat().st_size <= 0:
             raise FrameExtractionError("Frame extraction did not produce an image.")
@@ -66,3 +76,9 @@ def validate_timestamp(timestamp_seconds: float) -> float:
 
 def format_timestamp(timestamp_seconds: float) -> str:
     return f"{timestamp_seconds:.3f}".rstrip("0").rstrip(".")
+
+
+"""The FfmpegFrameExtractionService class is designed to extract a single JPEG frame from a video file at a specified timestamp. 
+It uses the FFmpeg command-line tool to perform the extraction, ensuring that the output image is scaled to a maximum width while maintaining the aspect ratio.
+The service handles various error scenarios, such as missing FFmpeg, timeouts, and failed extractions, by raising a custom FrameExtractionError with a user-friendly message.
+"""

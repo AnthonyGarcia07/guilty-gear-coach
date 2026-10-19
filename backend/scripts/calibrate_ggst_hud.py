@@ -44,6 +44,10 @@ def crop_region(image: Image.Image, bounds: tuple[float, float, float, float]) -
 
 
 def region_metrics(region: Image.Image) -> dict[str, float]:
+    """Measure candidate signals used to choose production detector thresholds."""
+
+    # Match the production detector's normalization so measurements from this
+    # exploratory script remain comparable with runtime frames.
     normalized = region.resize((160, max(1, round(region.height * 160 / region.width))))
     if hasattr(normalized, "get_flattened_data"):
         pixels = list(normalized.get_flattened_data())
@@ -84,6 +88,8 @@ def adjacent_difference(image: Image.Image, axis: str) -> float:
 
 
 def top_symmetry(left: Image.Image, right: Image.Image) -> float:
+    """Estimate whether mirrored top regions have the balanced shape of a HUD."""
+
     right_flipped = ImageOps.mirror(right)
     right_resized = right_flipped.resize(left.size)
     difference = ImageChops.difference(left, right_resized)
@@ -147,3 +153,16 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+"""Measure sample GGST screenshots to help improve HUD detection.
+
+This development script loads saved screenshots from different parts
+of a Guilty Gear Strive match.
+
+It measures pixel brightness, visual edges, and similarities between
+HUD regions to help developers choose detection thresholds.
+
+The results are printed as tables for review. This script does not
+analyze user replays or change the production HUD detector.
+"""

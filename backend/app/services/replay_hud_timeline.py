@@ -21,6 +21,14 @@ class ReplayHudTimelineError(RuntimeError):
 
 @dataclass(frozen=True)
 class ReplayHudTimelineSample:
+    """The outcome of inspecting one replay timestamp.
+
+    ``status="ok"`` means extraction and detection succeeded; its classification
+    may still be ``unknown`` when the visual evidence is inconclusive. A
+    ``failed`` sample represents a technical error and therefore has no visual
+    classification, evidence, or measurements.
+    """
+
     timestamp_seconds: float
     status: TimelineSampleStatus
     classification: GGSTHudClassification | None
@@ -31,6 +39,8 @@ class ReplayHudTimelineSample:
 
 @dataclass(frozen=True)
 class ReplayHudTimeline:
+    """Ordered HUD observations produced by one fixed-interval replay scan."""
+
     duration_seconds: float
     interval_seconds: float
     start_offset_seconds: float
@@ -38,6 +48,13 @@ class ReplayHudTimeline:
 
 
 class ReplayHudTimelineScanner:
+    """Coordinate frame extraction and HUD detection across a bounded timeline.
+
+    Extraction and detection are injected so orchestration can be tested without
+    running FFmpeg or reading real images. One failed timestamp is recorded and
+    does not prevent later timestamps from being inspected.
+    """
+
     def __init__(
         self,
         frame_extractor: FFmpegFrameExtractionService | None = None,
@@ -54,6 +71,10 @@ class ReplayHudTimelineScanner:
         start_offset_seconds: float = 0.0,
         max_samples: int = DEFAULT_MAX_TIMELINE_SAMPLES,
     ) -> ReplayHudTimeline:
+        """Scan a local replay at deterministic timestamps and clean temporary frames."""
+
+        # Generate and validate the full schedule before starting expensive work.
+        # Invalid or oversized scans therefore fail without extracting any frames.
         timestamps_seconds = generate_replay_sample_timestamps(
             duration_seconds=duration_seconds,
             interval_seconds=interval_seconds,
@@ -75,6 +96,8 @@ class ReplayHudTimelineScanner:
                     samples.append(failed_sample(timestamp_seconds, error.public_message))
                     continue
                 finally:
+                    # Each image is needed only for its detector call. Explicit
+                    # cleanup also handles adapters that fail after writing a file.
                     frame_path.unlink(missing_ok=True)
 
                 samples.append(
@@ -102,6 +125,12 @@ def generate_replay_sample_timestamps(
     start_offset_seconds: float = 0.0,
     max_samples: int = DEFAULT_MAX_TIMELINE_SAMPLES,
 ) -> list[float]:
+    """Build an ascending, millisecond-precision schedule before the video end.
+
+    The function rejects schedules above ``max_samples`` instead of truncating
+    them because silent truncation would make the resulting timeline incomplete.
+    """
+
     duration = normalize_positive_float(duration_seconds, "Duration")
     interval = normalize_positive_float(interval_seconds, "Interval")
     start_offset = normalize_non_negative_float(start_offset_seconds, "Start offset")
@@ -113,6 +142,8 @@ def generate_replay_sample_timestamps(
     timestamps: list[float] = []
     next_timestamp = start_offset
     while next_timestamp < duration:
+        # Stable millisecond timestamps match the precision sent to FFmpeg and
+        # prevent floating-point drift from creating duplicate samples.
         timestamp = round(next_timestamp, TIMESTAMP_PRECISION_DIGITS)
         if timestamp >= duration:
             break
@@ -160,3 +191,17 @@ def normalize_non_negative_float(value: float, label: str) -> float:
 def validate_positive_integer(value: int, label: str) -> None:
     if type(value) is not int or value <= 0:
         raise ReplayHudTimelineError(f"{label} must be a positive integer.")
+
+
+"""Scan replay videos at regular intervals to detect the GGST combat HUD.
+
+Generates timestamps across a replay, extracts a frame at each timestamp,
+and uses the HUD detection service to classify the image.
+
+Records successful detections and technical failures separately, allowing
+the scan to continue even when individual frames fail. Temporary images
+are cleaned up after processing.
+
+Returns a timeline of HUD classifications, evidence, and measurements
+that can be used by later replay-analysis stages.
+"""

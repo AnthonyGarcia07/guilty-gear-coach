@@ -16,6 +16,12 @@ class VideoInspectionError(RuntimeError):
 
 @dataclass(frozen=True)
 class VideoMetadata:
+    """Technical video properties needed by later replay-processing stages.
+
+    Duration, frame rate, and codec may be absent from otherwise usable files,
+    but valid dimensions are required to establish that a video stream exists.
+    """
+
     duration_seconds: float | None
     width: int
     height: int
@@ -24,10 +30,14 @@ class VideoMetadata:
 
 
 class FFprobeVideoInspectionService:
+    """Read video metadata through ffprobe without exposing tool output to callers."""
+
     def __init__(self, ffprobe_path: str = "ffprobe") -> None:
         self.ffprobe_path = ffprobe_path
 
     def inspect(self, video_path: str | Path) -> VideoMetadata:
+        """Inspect one local video and translate subprocess failures into safe errors."""
+
         try:
             completed = subprocess.run(
                 [
@@ -56,6 +66,8 @@ class FFprobeVideoInspectionService:
 
 
 def parse_ffprobe_json(output: str) -> VideoMetadata:
+    """Convert ffprobe JSON into the small, validated contract used by the app."""
+
     try:
         payload = json.loads(output)
     except json.JSONDecodeError as error:
@@ -77,7 +89,11 @@ def parse_ffprobe_json(output: str) -> VideoMetadata:
     if width is None or height is None:
         raise VideoInspectionError("Video stream is missing resolution metadata.")
 
+    # Some containers report duration on the stream while others only report it
+    # at the file-format level, so prefer the stream value and then fall back.
     duration = first_positive_float(video_stream.get("duration"), nested_get(payload, "format", "duration"))
+    # Average frame rate is usually the useful playback rate. The raw stream rate
+    # remains a fallback because either field may be missing or reported as 0/0.
     fps = parse_frame_rate(video_stream.get("avg_frame_rate")) or parse_frame_rate(video_stream.get("r_frame_rate"))
     codec = cleaned_string(video_stream.get("codec_name"))
 
@@ -129,3 +145,11 @@ def cleaned_string(value: Any) -> str | None:
         return None
     cleaned = value.strip()
     return cleaned or None
+
+
+"""Inspect local replay videos using FFprobe.
+
+Extracts techincal metadata such as duration, resolution, frame rate,
+and codec. Parses and validates the output into a VideoMetadata object
+while converting subprocess failures into safe, user-facing errors.
+"""

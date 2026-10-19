@@ -8,6 +8,8 @@ from PIL import Image, UnidentifiedImageError
 
 GGSTHudClassification = Literal["likely_gameplay_hud", "not_gameplay_hud", "unknown"]
 
+# These thresholds were calibrated from GGST screenshots. They describe the
+# current deterministic detector and should only change with regression evidence.
 TOP_LEFT_HUD_EDGE_THRESHOLD = 13.0
 TOP_RIGHT_HUD_EDGE_THRESHOLD = 13.0
 TOP_CENTER_SUPPORT_EDGE_THRESHOLD = 11.0
@@ -35,12 +37,22 @@ class GGSTHudDetectionError(RuntimeError):
 
 @dataclass(frozen=True)
 class GGSTHudDetectionResult:
+    """A classification plus the measurements and evidence that produced it."""
+
     classification: GGSTHudClassification
     evidence: dict[str, bool]
     measurements: dict[str, float]
 
 
 class GGSTHudDetectionService:
+    """Classify whether a frame contains the expected GGST combat HUD.
+
+    The detector follows a transparent pipeline: crop stable screen regions,
+    measure their pixel variation, convert measurements into boolean evidence,
+    and classify that evidence. It does not identify characters or gameplay
+    actions.
+    """
+
     def detect(self, image_path: str | Path) -> GGSTHudDetectionResult:
         image = load_image(image_path)
         region_measurements = {
@@ -67,6 +79,8 @@ def load_image(image_path: str | Path) -> Image.Image:
 
 
 def crop_region(image: Image.Image, bounds: tuple[float, float, float, float]) -> Image.Image:
+    """Crop proportional bounds so the same HUD regions work across resolutions."""
+
     width, height = image.size
     if width <= 0 or height <= 0:
         raise GGSTHudDetectionError("HUD detection image has invalid dimensions.")
@@ -85,6 +99,10 @@ def crop_region(image: Image.Image, bounds: tuple[float, float, float, float]) -
 
 
 def measure_region(region: Image.Image) -> dict[str, float]:
+    """Measure brightness variation and horizontal-edge structure in one crop."""
+
+    # A fixed width makes edge scores comparable across source resolutions while
+    # the calculated height preserves the crop's aspect ratio.
     normalized_height = max(1, round(region.height * REGION_NORMALIZED_WIDTH / region.width))
     normalized = region.resize((REGION_NORMALIZED_WIDTH, normalized_height))
     pixels = flattened_pixels(normalized)
@@ -103,6 +121,8 @@ def flattened_pixels(image: Image.Image) -> list[int]:
 
 
 def adjacent_intensity_difference(image: Image.Image, axis: Literal["x", "y"]) -> float:
+    """Return the average brightness change between neighboring pixels."""
+
     width, height = image.size
     pixels = image.load()
     total = 0
@@ -139,6 +159,8 @@ def flatten_measurements(image: Image.Image, region_measurements: dict[str, dict
 
 
 def build_evidence(measurements: dict[str, float]) -> dict[str, bool]:
+    """Turn numeric measurements into named visual claims used for classification."""
+
     top_left_hud = measurements["top_left_horizontal_edge_score"] >= TOP_LEFT_HUD_EDGE_THRESHOLD
     top_right_hud = measurements["top_right_horizontal_edge_score"] >= TOP_RIGHT_HUD_EDGE_THRESHOLD
     top_center_support = measurements["top_center_horizontal_edge_score"] >= TOP_CENTER_SUPPORT_EDGE_THRESHOLD
@@ -168,8 +190,12 @@ def build_evidence(measurements: dict[str, float]) -> dict[str, bool]:
 
 
 def classify_evidence(evidence: dict[str, bool]) -> GGSTHudClassification:
+    """Classify strong HUD structure, clear absence, or inconclusive evidence."""
+
     if evidence["bilateral_top_hud"] and (evidence["top_center_support"] or evidence["bottom_support"]):
         return "likely_gameplay_hud"
+    # A blank image was processed successfully, but it does not prove that the
+    # replay is outside gameplay; fades and transitions can also be blank.
     if evidence["blank_frame"]:
         return "unknown"
     if (
@@ -181,3 +207,17 @@ def classify_evidence(evidence: dict[str, bool]) -> GGSTHudClassification:
     ):
         return "not_gameplay_hud"
     return "unknown"
+
+
+""" Detect the Guilty Gear Strive (GGST) combat HUD in extracted video frames.
+
+This module checks specific areas of an image where the game's HUD normally
+appears, such as the health bars. It measures changes in pixel brightness
+and detects visual edges to help determine whether the HUD is present.
+
+These measurements are compared against predefined thresholds to classify
+each frame as likely_gameplay_hud, not_gameplay_hud, or unknown.
+
+The module also returns the measurements and evidence behind its decision.
+It does not detect characters, moves, or other gameplay actions.
+"""

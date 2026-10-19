@@ -9,3 +9,4 @@ dist/
 postgres_data/
 dev-fixtures/
 memory.md
+docsummaries/deterministic-replay-analysis.md

@@ -20,6 +20,8 @@ class ReplayGameplayWindowError(RuntimeError):
 
 @dataclass(frozen=True)
 class ReplayGameplayWindowConfig:
+    """Rules for confirming gameplay and bridging inconclusive timeline samples."""
+
     min_consecutive_likely_samples: int = DEFAULT_MIN_CONSECUTIVE_LIKELY_SAMPLES
     max_unknown_bridge_samples: int = DEFAULT_MAX_UNKNOWN_BRIDGE_SAMPLES
     max_failed_bridge_samples: int = DEFAULT_MAX_FAILED_BRIDGE_SAMPLES
@@ -28,6 +30,13 @@ class ReplayGameplayWindowConfig:
 
 @dataclass(frozen=True)
 class ReplayGameplayBoundary:
+    """An uncertainty range containing a sampled gameplay transition.
+
+    For example, ``earliest_seconds=10`` and ``latest_seconds=12`` means the
+    transition occurred somewhere in ``[10s, 12s]``. It is not an estimate that
+    the transition happened at the midpoint.
+    """
+
     earliest_seconds: float
     latest_seconds: float
     kind: GameplayBoundaryKind
@@ -35,6 +44,8 @@ class ReplayGameplayBoundary:
 
 @dataclass(frozen=True)
 class ReplayGameplayWindow:
+    """A coarse gameplay interval and the timeline evidence supporting it."""
+
     start_boundary: ReplayGameplayBoundary
     end_boundary: ReplayGameplayBoundary
     supporting_likely_timestamps: tuple[float, ...]
@@ -44,6 +55,8 @@ class ReplayGameplayWindow:
 
 @dataclass(frozen=True)
 class ReplayGameplayWindowResult:
+    """All coarse gameplay windows inferred from one validated timeline."""
+
     duration_seconds: float
     samples_analyzed: int
     windows: tuple[ReplayGameplayWindow, ...]
@@ -51,6 +64,8 @@ class ReplayGameplayWindowResult:
 
 @dataclass
 class WindowDraft:
+    """Mutable internal state used only while one gameplay window is being built."""
+
     start_boundary: ReplayGameplayBoundary
     supporting_likely_timestamps: list[float]
     bridged_unknown_timestamps: list[float]
@@ -62,6 +77,20 @@ def infer_gameplay_windows(
     timeline: ReplayHudTimeline,
     config: ReplayGameplayWindowConfig | None = None,
 ) -> ReplayGameplayWindowResult:
+    """Infer coarse gameplay ranges without claiming unsampled precision.
+
+    The loop acts as a small state machine:
+
+    * ``pending_likely_run`` waits for enough consecutive likely samples to
+      confirm that gameplay has begun.
+    * ``active_window`` accumulates evidence for confirmed gameplay.
+    * ``pending_gap`` temporarily holds unknown or failed samples. The gap is
+      included only if later likely evidence confirms gameplay resumed.
+
+    Negative evidence closes an active window. Unknown visual evidence and
+    technical failures follow similar control flow but remain separately recorded.
+    """
+
     rules = config or ReplayGameplayWindowConfig()
     validate_timeline(timeline)
     validate_config(rules)
@@ -78,6 +107,8 @@ def infer_gameplay_windows(
                 pending_likely_run.append(sample)
                 if len(pending_likely_run) >= rules.min_consecutive_likely_samples:
                     first_likely = pending_likely_run[0]
+                    # The boundary starts before the first sample in the confirmed
+                    # run, not before the sample that happened to meet the threshold.
                     active_window = WindowDraft(
                         start_boundary=start_boundary_for(first_likely, previous_sample_before_run(timeline.samples, first_likely)),
                         supporting_likely_timestamps=[likely.timestamp_seconds for likely in pending_likely_run],
@@ -88,6 +119,8 @@ def infer_gameplay_windows(
                     pending_likely_run = []
             else:
                 if pending_gap:
+                    # Later likely evidence proves the bounded gap was surrounded
+                    # by gameplay, so it can now be retained inside this window.
                     commit_pending_gap(active_window, pending_gap)
                     pending_gap = []
                 active_window.supporting_likely_timestamps.append(sample.timestamp_seconds)
@@ -97,6 +130,8 @@ def infer_gameplay_windows(
             if active_window is not None:
                 pending_gap.append(sample)
                 if not can_bridge_gap(pending_gap, rules):
+                    # Once ambiguity exceeds the configured allowance, stop at the
+                    # first gap sample rather than inventing evidence inside it.
                     windows.append(finalize_window(active_window, unbridgeable_gap_boundary(active_window, pending_gap[0])))
                     active_window = None
                     pending_gap = []
@@ -105,6 +140,8 @@ def infer_gameplay_windows(
             if active_window is not None:
                 pending_gap.append(sample)
                 if not can_bridge_gap(pending_gap, rules):
+                    # Failed extraction is not negative visual evidence. It still
+                    # limits how far the current window can be supported.
                     windows.append(finalize_window(active_window, unbridgeable_gap_boundary(active_window, pending_gap[0])))
                     active_window = None
                     pending_gap = []
@@ -112,6 +149,8 @@ def infer_gameplay_windows(
             pending_likely_run = []
             if active_window is not None:
                 if pending_gap:
+                    # A negative after an unresolved gap cannot locate the end more
+                    # precisely than the start of that gap.
                     windows.append(finalize_window(active_window, unresolved_gap_boundary(active_window, pending_gap[0])))
                     pending_gap = []
                 else:
@@ -124,6 +163,8 @@ def infer_gameplay_windows(
 
     if active_window is not None:
         if pending_gap:
+            # With no later sample to resolve the gap, preserve the last supported
+            # range instead of assuming gameplay continued through it.
             windows.append(finalize_window(active_window, unresolved_gap_boundary(active_window, pending_gap[0])))
         else:
             windows.append(finalize_window(active_window, continues_to_end_boundary(active_window, timeline.duration_seconds)))
@@ -165,7 +206,11 @@ def start_boundary_for(
     first_likely: ReplayHudTimelineSample,
     previous_sample: ReplayHudTimelineSample | None,
 ) -> ReplayGameplayBoundary:
+    """Bracket gameplay start using the sample before the first likely evidence."""
+
     if previous_sample is None:
+        # Gameplay was visible in the first available sample, so no earlier
+        # non-gameplay observation exists to refine the start.
         return ReplayGameplayBoundary(
             earliest_seconds=0.0,
             latest_seconds=first_likely.timestamp_seconds,
@@ -182,6 +227,8 @@ def can_bridge_gap(
     pending_gap: list[ReplayHudTimelineSample],
     config: ReplayGameplayWindowConfig,
 ) -> bool:
+    """Check unknown and failed allowances independently to preserve provenance."""
+
     unknown_count = sum(1 for sample in pending_gap if is_unknown_sample(sample))
     failed_count = sum(1 for sample in pending_gap if is_failed_sample(sample))
     return unknown_count <= config.max_unknown_bridge_samples and failed_count <= config.max_failed_bridge_samples
@@ -255,6 +302,8 @@ def finalize_window(
 
 
 def validate_timeline(timeline: ReplayHudTimeline) -> None:
+    """Reject evidence that cannot form a trustworthy chronological timeline."""
+
     if not math.isfinite(timeline.duration_seconds) or timeline.duration_seconds <= 0:
         raise ReplayGameplayWindowError("Timeline duration must be a finite number greater than 0.")
 
@@ -285,3 +334,19 @@ def validate_config(config: ReplayGameplayWindowConfig) -> None:
         raise ReplayGameplayWindowError("Maximum failed bridge samples must be a non-negative integer.")
     if type(config.negative_samples_to_terminate) is not int or config.negative_samples_to_terminate != 1:
         raise ReplayGameplayWindowError("Negative samples to terminate must be exactly 1 for coarse gameplay-window inference.")
+
+
+
+"""Identify where gameplay likely starts and ends in a GGST replay.
+
+This module uses HUD detection results from multiple video timestamps
+to find sections where gameplay is likely happening.
+
+It requires multiple consecutive gameplay detections to confirm a
+gameplay window. It also allows a limited number of unknown or failed
+detections without immediately ending the window.
+
+Returns estimated gameplay start and end times, along with the evidence
+used to identify them. These times are approximate and can be made
+more accurate in later stages of replay analysis.
+"""
