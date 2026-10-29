@@ -1,3 +1,11 @@
+/**
+ * Route-level page for viewing and editing one match.
+ *
+ * A route-level page reads the URL, loads the main record, and composes smaller
+ * feature components. This page owns match loading, editing, and deletion.
+ * ReplayMetadataSection owns replay-specific state and controls. The frontend
+ * organizes the screen, but the backend still checks ownership on every request.
+ */
 import { Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
@@ -32,6 +40,9 @@ export function MatchDetail() {
 
   useEffect(() => {
     if (!id) return;
+    // Clear the previous match so its information does not flash on screen while
+    // a newly selected match is loading. The active flag also prevents a late
+    // response from updating a page the user has already left.
     let active = true;
     setMatch(null);
     api.getMatch(id).then((loadedMatch) => {
@@ -79,6 +90,7 @@ export function MatchDetail() {
           await submitMatchUpdate(routeMatch.id, payload, api, navigate, returnTo);
         }} />
       </section>
+      {/* Passing the loaded match ID keeps replay state scoped to this match. */}
       <ReplayMetadataSection matchId={routeMatch.id} />
       {deleteConfirmationOpen && (
         <ConfirmDialog
@@ -93,3 +105,10 @@ export function MatchDetail() {
     </section>
   );
 }
+
+
+/*
+Built a React page component that displays the details of a specific match.
+It includes sections for viewing match information, editing match notes, and managing replay videos.
+The page also handles the deletion of matches with a confirmation dialog and error handling.
+*/

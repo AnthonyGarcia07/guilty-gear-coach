@@ -10,3 +10,4 @@ postgres_data/
 dev-fixtures/
 memory.md
 docsummaries/deterministic-replay-analysis.md
+docsummaries/private-replay-lifecycle.md

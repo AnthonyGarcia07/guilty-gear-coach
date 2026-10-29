@@ -1,9 +1,24 @@
+"""Define and validate the replay API's request and response shapes.
+
+SQLAlchemy models describe database rows; these Pydantic models describe JSON
+sent across the HTTP API. Request models contain only fields the browser is
+allowed to choose. Response models can also contain server-owned fields such as
+upload status and inspected video details.
+
+This separation is a security boundary. For example, the browser may describe
+the file it wants to upload, but it cannot declare that the upload succeeded or
+invent trusted ffprobe results.
+"""
+
 import math
 from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+# ``Literal`` creates a closed set of accepted strings. These values match the
+# model's database constraints and the frontend TypeScript unions. If one list
+# changes, the other layers and their tests must be updated too.
 ReplaySourceType = Literal["replay_file", "video", "external_reference"]
 ReplayUploadStatus = Literal["metadata_only", "pending_upload", "uploaded"]
 ReplayProcessingStatus = Literal["not_processed", "processing", "processed", "failed"]
@@ -41,6 +56,12 @@ class ReplayUpdate(BaseModel):
 
 
 class ReplayUploadInit(BaseModel):
+    """Validate the browser's description of an MP4 before upload begins.
+
+    These values are still untrusted claims. The backend checks the real object
+    metadata from R2 during upload confirmation.
+    """
+
     original_filename: str | None = Field(default=None, max_length=255)
     content_type: Literal["video/mp4"]
     size_bytes: int = Field(gt=0)
@@ -50,6 +71,12 @@ class ReplayUploadInit(BaseModel):
 
 
 class ReplayRead(BaseModel):
+    """Describe a replay returned to the browser.
+
+    ``from_attributes`` below lets Pydantic read these fields directly from a
+    SQLAlchemy ``Replay`` object instead of requiring a manually built dict.
+    """
+
     id: int
     match_id: int
     source_type: ReplaySourceType
@@ -74,6 +101,8 @@ class ReplayRead(BaseModel):
 
 
 class ReplayUploadInitResponse(BaseModel):
+    """Return the pending replay plus a temporary URL for uploading its MP4."""
+
     replay: ReplayRead
     upload_url: str
     storage_key: str
@@ -94,6 +123,12 @@ class ReplayInspectResponse(BaseModel):
 
 
 class ReplayFrameSampleRequest(BaseModel):
+    """Request one video frame at a timestamp measured in seconds.
+
+    This schema rejects negative, infinite, and NaN values. The route performs
+    the separate check that the timestamp is before this video's end.
+    """
+
     timestamp_seconds: float = Field(ge=0)
 
     model_config = ConfigDict(allow_inf_nan=False, extra="forbid")
@@ -107,6 +142,13 @@ class ReplayHudDetectionResponse(BaseModel):
 
 
 class ReplayHudDetectionBatchRequest(BaseModel):
+    """Validate a small batch of timestamps for HUD detection.
+
+    The limit keeps one HTTP request from starting unbounded FFmpeg work. The
+    validator also rejects duplicate or invalid timestamps before any video is
+    downloaded or processed.
+    """
+
     timestamps_seconds: list[float] = Field(min_length=1, max_length=10)
 
     @field_validator("timestamps_seconds")
@@ -124,3 +166,13 @@ class ReplayHudDetectionBatchRequest(BaseModel):
 
 class ReplayHudDetectionBatchResponse(BaseModel):
     samples: list[ReplayHudDetectionResponse]
+
+
+"""
+"I use Pydantic schemas to define and validate the JSON exchanged between my React frontend and FastAPI backend.
+
+The schemas separate user-controlled fields from server-controlled fields.
+For example, users can provide an MP4 filename and file size when initiating an upload, 
+but they cannot directly set its upload status or processing results.
+The backend verifies the upload and populates those fields itself."
+"""

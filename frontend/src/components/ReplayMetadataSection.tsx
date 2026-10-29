@@ -1,3 +1,14 @@
+/**
+ * Manage the replay records and videos attached to one match.
+ *
+ * This file contains both the stateful controller component and the mostly
+ * presentational component below it. Users can add replay metadata, upload or
+ * download MP4s, inspect technical video information, and sample frames.
+ *
+ * The browser never receives R2 credentials. It receives a temporary URL for a
+ * single upload or download, while the backend still controls authorization and
+ * trusted replay state.
+ */
 import { useEffect, useRef, useState } from "react";
 import { normalizeUnknownError } from "../api/errors";
 import { api, uploadReplayFileToStorage } from "../api/client";
@@ -36,6 +47,8 @@ type ReplayFormState = {
 };
 
 type ReplayApi = {
+  // Defining the operations as a type makes this component easier to test.
+  // Tests can pass fake functions instead of making HTTP or storage requests.
   listReplays: (matchId: number) => Promise<Replay[]>;
   createReplay: (matchId: number, payload: ReplayCreateInput) => Promise<Replay>;
   updateReplay: (matchId: number, replayId: number, payload: ReplayUpdateInput) => Promise<Replay>;
@@ -156,6 +169,10 @@ export async function uploadMp4Replay({
   replayApi: Pick<ReplayApi, "initializeReplayUpload" | "confirmReplayUpload">;
   putFile?: (uploadUrl: string, file: File) => Promise<void>;
 }) {
+  // Upload crosses two systems, so it happens in three steps:
+  // 1. Ask the backend to create a pending replay and temporary upload URL.
+  // 2. Send the MP4 directly from the browser to private object storage.
+  // 3. Ask the backend to verify the stored file and mark the replay uploaded.
   const initialized = await replayApi.initializeReplayUpload(matchId, {
     original_filename: file.name,
     content_type: "video/mp4",
@@ -193,6 +210,8 @@ export function ReplayMetadataSection({
   putFile?: (uploadUrl: string, file: File) => Promise<void>;
   openUrl?: (url: string) => void | Window | null;
 }) {
+  // This component owns data fetching, state, and side effects. Keeping those
+  // responsibilities here lets ReplayMetadataContent focus on rendering the UI.
   const [replays, setReplays] = useState<Replay[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -216,6 +235,9 @@ export function ReplayMetadataSection({
   const [editFieldError, setEditFieldError] = useState("");
 
   useEffect(() => {
+    // A match change starts a new request and clears state from the old match.
+    // The active flag prevents an older, slower request from updating this
+    // component after the user has navigated somewhere else.
     let active = true;
     setLoading(true);
     setError("");
@@ -249,6 +271,8 @@ export function ReplayMetadataSection({
   }, [matchId, replayApi]);
 
   useEffect(() => {
+    // URL.createObjectURL keeps the Blob in browser memory. Revoke every URL
+    // when the component unmounts so sampled frames do not leak memory.
     return () => {
       Object.values(sampleFrameUrlsRef.current).forEach((url) => URL.revokeObjectURL(url));
     };
@@ -522,6 +546,8 @@ export function ReplayMetadataContent({
   onSampleTimestampChange: (replayId: number, value: string) => void;
   onSampleFrame: (replay: Replay) => void;
 }) {
+  // This component receives state and callbacks as props. It does not call the
+  // API itself, which makes its rendering behavior easier to test separately.
   return (
     <section className="panel replay-panel">
       <div className="section-heading">
@@ -631,3 +657,12 @@ function ReplayFields({ form, onChange }: { form: ReplayFormState; onChange: (fo
     </>
   );
 }
+
+
+/*
+Built a React component that allows users to manage their replay videos. 
+It handles file selection, upload validation, API requests, and displaying replay information.
+For uploads, the frontend first requests a presigned URL from FastAPI, uploads the MP4 directly 
+to Cloudflare R2, and then asks the backend to confirm the upload. I also separated the component's
+state management from its UI rendering to make the code easier to test
+*/
