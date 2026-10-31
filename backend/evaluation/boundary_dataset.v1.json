@@ -1,0 +1,51 @@
+{
+  "dataset_version": "1.0.0",
+  "analyzer_version": "1.0.0",
+  "config": {
+    "target_tolerance_seconds": 0.25,
+    "max_samples": 8,
+    "min_consecutive_likely_samples": 2
+  },
+  "cases": [
+    {
+      "case_id": "eval-replay-001-round-start",
+      "clip_filename": "stage2-eval-replay-001.mp4",
+      "direction": "start",
+      "coarse_boundary": {
+        "earliest_seconds": 12.0,
+        "latest_seconds": 14.0
+      },
+      "expected_boundary": {
+        "earliest_seconds": 12.375,
+        "latest_seconds": 12.5
+      },
+      "expected_status": "unknown",
+      "source_resolution": "1920x1080",
+      "source_frame_rate_fps": 59.99905807092733,
+      "game_patch": null,
+      "label_reviewed_by": "project owner",
+      "label_reviewed_on": "2026-10-31",
+      "notes": "LET'S ROCK overlay clears between reviewed 8 fps samples; lower detector evidence remains ambiguous."
+    },
+    {
+      "case_id": "eval-replay-001-round-end-effects",
+      "clip_filename": "stage2-eval-replay-001.mp4",
+      "direction": "end",
+      "coarse_boundary": {
+        "earliest_seconds": 58.0,
+        "latest_seconds": 60.0
+      },
+      "expected_boundary": {
+        "earliest_seconds": 59.5,
+        "latest_seconds": 59.75
+      },
+      "expected_status": "unknown",
+      "source_resolution": "1920x1080",
+      "source_frame_rate_fps": 59.99905807092733,
+      "game_patch": null,
+      "label_reviewed_by": "project owner",
+      "label_reviewed_on": "2026-10-31",
+      "notes": "Round-ending hit effects obscure the HUD; refinement must retain visual ambiguity."
+    }
+  ]
+}

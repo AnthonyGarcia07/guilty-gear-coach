@@ -10,14 +10,14 @@ The build plan owns milestone scope, dependencies, and acceptance criteria. This
 
 | Status field | Current value |
 | --- | --- |
-| Roadmap position | Stage 1 — Current Implemented Baseline |
+| Roadmap position | Stage 2 — Boundary Refinement and Evaluation Harness (in progress) |
 | Last completed stage | Stage 1 — Current Implemented Baseline |
-| Active implementation | None recorded |
+| Active implementation | Stage 2 — service, harness, and first confirmed labelled replay implemented; multi-replay coverage pending |
 | Next recommended milestone | Stage 2 — Boundary Refinement and Evaluation Harness |
 | First targeted replay-derived coaching finding | “The round appears to have ended while Burst was visually available.” |
-| Status reviewed | 2026-10-17 |
+| Status reviewed | 2026-10-31 |
 
-Stage 1 is marked complete from repository inspection and existing project documentation. The automated suites were not rerun during this documentation pass, so this tracker does not claim a new green test run.
+Stage 1 remains the last completed stage. Stage 2 has an implemented and focused-tested service contract, but it remains in progress until the versioned labelled dataset is added and representative media evaluation is run.
 
 ---
 
@@ -26,7 +26,7 @@ Stage 1 is marked complete from repository inspection and existing project docum
 | Stage | Milestone | Status | Notes |
 | ---: | --- | --- | --- |
 | 1 | Current implemented baseline | Complete | Match tracking, manual coaching, private replay storage, media inspection, HUD detection, timeline scanning, and coarse gameplay windows exist |
-| 2 | Boundary refinement and evaluation harness | Next | No implementation recorded; this is the next recommended engineering milestone |
+| 2 | Boundary refinement and evaluation harness | In progress | Service, tests, manifest, metrics, CLI, and one confirmed labelled replay exist; representative multi-replay evaluation remains pending |
 | 3 | Durable analysis-run vertical slice | Not started | Requires Stage 2 contract and verified disposable database testing |
 | 4 | Game and round segmentation | Not started | Depends on durable analysis runs and evaluated boundary evidence |
 | 5 | Early multimodal gameplay-understanding prototype | Not started | May overlap Stage 4 only after Stage 3 privacy, persistence, and derived-media gates |
@@ -76,10 +76,12 @@ Statuses mean:
 - [x] Single- and multi-timestamp HUD detection
 - [x] Internal HUD timeline scanning
 - [x] Internal coarse gameplay-window inference with uncertainty ranges
+- [x] Bounded gameplay-window boundary refinement with explicit `ok`, `unknown`, and `failed` outcomes
+- [x] Versioned boundary-evaluation manifest contract, metrics, and local CLI harness
 
 ### Not Yet Implemented
 
-- [ ] Gameplay-window boundary refinement
+- [x] Gameplay-window boundary refinement
 - [ ] Durable analysis runs, background worker, or analysis persistence tables
 - [ ] User-visible gameplay-window analysis results
 - [ ] Game or round segmentation
@@ -96,7 +98,7 @@ Statuses mean:
 
 **Goal:** refine existing coarse gameplay-window boundaries by sampling only within their uncertainty brackets, while preserving ambiguity and bounded processing.
 
-Before marking Stage 2 in progress, record the approved implementation scope and confirm access to legally usable, manually reviewed transition clips or frames. Before marking it complete, satisfy the deliverables and acceptance criteria in `context/build-plan.md`, including:
+Stage 2 implementation was approved on 2026-10-31. The first permitted replay labels were confirmed and evaluated. Before marking it complete, add at least one more representative labelled replay and satisfy the remaining acceptance criteria in `context/build-plan.md`, including:
 
 - a versioned evaluation dataset and documented sampling configuration;
 - a pure boundary-refinement service;
@@ -129,7 +131,7 @@ Record only decisions that change execution order, milestone status, or an unres
 
 ## Prerequisites and Follow-Ups
 
-- Obtain or define access to legally usable, labelled replay media for Stage 2 evaluation.
+- Add at least one more legally usable, labelled replay for representative Stage 2 evaluation.
 - Verify and document a disposable PostgreSQL test database before Stage 3 migrations or database-mutating worker tests.
 - Resolve the route-to-route shared-helper boundary before adding Stage 3 analysis routes.
 - Address permanent-loading and dialog-focus gaps before relying on new analysis UI flows.
@@ -144,6 +146,9 @@ Record only decisions that change execution order, milestone status, or an unres
 | --- | --- | --- | --- |
 | 2026-10-17 | Context-system documentation | Passed document checks | Markdown fences balanced, UTF-8 text preserved, final newlines present, and no trailing whitespace in audited context files |
 | 2026-10-17 | Application tests | Not run | Documentation work only; existing coverage is described in `README.md` and Stage 1 of the build plan |
+| 2026-10-31 | Stage 2 focused backend tests | Passed — 118 tests | Boundary refinement, evaluation harness, coarse gameplay windows, HUD timeline, frame extraction, and HUD detection tests passed in the isolated backend Docker image with pinned Pillow and FFmpeg dependencies |
+| 2026-10-31 | Stage 2 static verification | Passed | `python -m compileall -q app tests scripts` completed successfully; `git diff --check` reported no whitespace errors |
+| 2026-10-31 | Stage 2 real-media evaluation | First labelled replay passed | The project owner confirmed two labels from one permitted 1080p AV1 replay. Coarse ranges of 2.0s refined to 0.25s; mean midpoint-to-label error changed from 0.5s to 0.0s; unknown rate was 18.18%, technical failure rate 0%, mean sampling cost 5.5 frames, and total processing time 3.94s under FFmpeg 7.1.5. Another representative replay remains required before completion |
 
 For implementation entries, record the exact commands run, their results, and anything that could not be verified. Do not write “tests pass” without a corresponding command or trusted CI result.
 
